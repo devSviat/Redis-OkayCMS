@@ -1,0 +1,131 @@
+name: Bump version and release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Select version bump type?"
+        required: true
+        default: "patch"
+        type: choice
+        options:
+          - major
+          - minor
+          - patch
+
+env:
+  VENDOR: Sviat
+  MODULE: Redis
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get latest tag
+        id: get_tag
+        run: |
+          last_tag=$(git describe --tags --abbrev=0 || echo "v0.0.0")
+          echo "last_tag=$last_tag" >> $GITHUB_OUTPUT
+
+      - name: Bump version
+        id: bump
+        run: |
+          last=${{ steps.get_tag.outputs.last_tag }}
+          bump=${{ github.event.inputs.bump }}
+
+          ver=${last#v}
+          major=$(echo $ver | cut -d. -f1)
+          minor=$(echo $ver | cut -d. -f2)
+          patch=$(echo $ver | cut -d. -f3)
+
+          case $bump in
+            major)
+              major=$((major+1))
+              minor=0
+              patch=0
+              ;;
+            minor)
+              minor=$((minor+1))
+              patch=0
+              ;;
+            patch)
+              patch=$((patch+1))
+              ;;
+          esac
+
+          new_tag="v$major.$minor.$patch"
+          echo "new_tag=$new_tag" >> $GITHUB_OUTPUT
+
+      - name: Set build variables
+        id: vars
+        run: |
+          echo "module_path=${{ env.VENDOR }}/${{ env.MODULE }}" >> $GITHUB_OUTPUT
+          echo "zip_name=${{ env.MODULE }}-${{ steps.bump.outputs.new_tag }}.zip" >> $GITHUB_OUTPUT
+
+      - name: Check for changes since last tag
+        run: |
+          LAST_TAG=${{ steps.get_tag.outputs.last_tag }}
+          if [ "$LAST_TAG" != "v0.0.0" ] && [ "$(git rev-parse $LAST_TAG)" = "$(git rev-parse HEAD)" ]; then
+            echo "No new commits since $LAST_TAG. Aborting."
+            exit 1
+          fi
+
+      - name: Create new tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          NEW_TAG=${{ steps.bump.outputs.new_tag }}
+          if git rev-parse "$NEW_TAG" >/dev/null 2>&1; then
+            echo "Tag $NEW_TAG already exists. Deleting it."
+            git tag -d "$NEW_TAG"
+            git push origin --delete "$NEW_TAG" || true
+          fi
+          git tag "$NEW_TAG"
+          git push origin "$NEW_TAG"
+
+      - name: Build module archive
+        run: |
+          mkdir -p dist
+          mkdir -p temp_build/${{ steps.vars.outputs.module_path }}
+
+          rsync -av \
+            --exclude='.github' \
+            --exclude='.gitignore' \
+            --exclude='README.md' \
+            --exclude='temp_build' \
+            --exclude='dist' \
+            --exclude='.git' \
+            ./ temp_build/${{ steps.vars.outputs.module_path }}/
+
+          cd temp_build
+          zip -r ../dist/${{ steps.vars.outputs.zip_name }} ${{ steps.vars.outputs.module_path }}
+          cd ..
+          rm -rf temp_build
+
+      - name: Delete existing release if it exists
+        run: |
+          TAG=${{ steps.bump.outputs.new_tag }}
+          RELEASE_ID=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            https://api.github.com/repos/${{ github.repository }}/releases/tags/$TAG | jq .id)
+          if [ "$RELEASE_ID" != "null" ]; then
+            curl -s -X DELETE -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+              https://api.github.com/repos/${{ github.repository }}/releases/$RELEASE_ID
+          fi
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.bump.outputs.new_tag }}
+          name: Release ${{ steps.bump.outputs.new_tag }}
+          generate_release_notes: true
+          files: dist/${{ steps.vars.outputs.zip_name }}
+          fail_on_unmatched_files: false
+          draft: false
+          prerelease: false
