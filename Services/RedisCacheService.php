@@ -46,10 +46,7 @@ class RedisCacheService
         ];
     }
 
-    /**
-     * Секрет HMAC для підпису серіалізованих helper-кешів (set/get/mGet).
-     * Порожньо = старий формат без підпису (сумісність). Непорожньо = відхиляються сторонні записи в Redis.
-     */
+    /** Отримати HMAC-секрет для підпису кеша з налаштувань. */
     private function getCacheHmacSecret(): string
     {
         $raw = $this->settings->get('sviat__redis__cache_hmac_secret');
@@ -61,12 +58,10 @@ class RedisCacheService
         return $s;
     }
 
-    /** Макс. розмір серіалізованого тіла (захист від DoS при підробленому заголовку довжини). */
+    /** Максимальний розмір даних у кешу (16 МБ). */
     private const SIGNED_PAYLOAD_MAX_BYTES = 16777216;
 
-    /**
-     * Обгортка: v1 + 4 байти довжини (N) + 32 байти HMAC-SHA256 + serialized.
-     */
+    /** Додати HMAC-підпис до серіалізованих даних. */
     private function wrapSerializedPayload(string $serialized): string
     {
         $secret = $this->getCacheHmacSecret();
@@ -79,9 +74,7 @@ class RedisCacheService
         return 'v1' . pack('N', strlen($serialized)) . $sig . $serialized;
     }
 
-    /**
-     * @return string|null серіалізовані дані або null (пошкоджено / підробка / не той формат при увімкненому HMAC)
-     */
+    /** Перевірити та видалити HMAC-підпис з даних. */
     private function unwrapSerializedPayload(string $data): ?string
     {
         $secret = $this->getCacheHmacSecret();
@@ -132,7 +125,7 @@ class RedisCacheService
         return $config['enabled'] && class_exists('\\Redis');
     }
 
-    /** @return object|null Memoized phpredis client, or null if unavailable. */
+    /** Ініціалізувати Redis клієнт. */
     private function initClient(): ?object
     {
         if ($this->initialized) {
@@ -235,7 +228,7 @@ class RedisCacheService
         }
     }
 
-    /** Normalize different phpredis PING responses. */
+    /** Перевірити отримано вірну відповідь від Redis PING. */
     private function isPingSuccessful($response): bool
     {
         if ($response === true || $response === 1) {
@@ -304,6 +297,7 @@ class RedisCacheService
             . ':' . md5(serialize($args));
     }
 
+    /** Перевірити чи дозволено кешувати дані цього типу. */
     public function canCache(string $name): bool
     {
         if (isset($this->canCacheMemo[$name])) {
@@ -314,41 +308,65 @@ class RedisCacheService
             return $this->canCacheMemo[$name] = false;
         }
 
-        // Do not cache admin requests.
-        $uri = \Okay\Core\Request::getRequestUri();
-        if ($uri !== '' && (str_starts_with($uri, 'backend') || str_starts_with($uri, '/backend'))) {
-            return false;
-        }
-        if (!empty($_GET['controller']) && is_string($_GET['controller'])) {
-            if (str_starts_with($_GET['controller'], 'Sviat.') || str_contains($_GET['controller'], 'Admin')) {
-                // Most admin controllers match this pattern.
-                return false;
-            }
-        }
+        $name_lower = strtolower($name);
 
-        // Payment methods may contain gateway secrets.
-        if (strtolower($name) === 'main_payment_methods') {
-            return false;
-        }
-
-        // Explicit deny list.
-        $deny = [
-            'orders',
-            'users',
-            'cart',
-            'admin',
-            'stock',
-            'warehouse',
-            'inventory',
+        // Чутливі дані, які НІКОЛИ не слід кешувати
+        $sensitive_keywords = [
+            'order',      // замовлення (персональні дані)
+            'user',       // користувачі
+            'cart',       // кошик (персональний)
+            'wallet',     // гаманці (персональні)
+            'payment',    // платежі
+            'invoice',    // рахунки
+            'delivery',   // доставка (може містити адреси)
+            'address',    // адреси
+            'customer',   // покупці
+            'admin',      // адмін-панель
+            'statistic',  // статистика
+            'report',     // звіти
+            'import',     // імпорт
+            'export',     // експорт
+            'password',   // паролі
+            'token',      // токени
         ];
-        $lower = strtolower($name);
-        foreach ($deny as $word) {
-            if (str_contains($lower, $word)) {
+
+        foreach ($sensitive_keywords as $keyword) {
+            if (str_contains($name_lower, $keyword)) {
                 return $this->canCacheMemo[$name] = false;
             }
         }
 
+        // На бекенді: якщо це явно адмін-функція, не кешувати
+        $is_backend = $this->isBackendRequest();
+        if ($is_backend && str_contains($name_lower, 'admin')) {
+            return $this->canCacheMemo[$name] = false;
+        }
+
+        // Все інше можна кешувати
         return $this->canCacheMemo[$name] = true;
+    }
+
+    /** Перевірити чи це запит з адміні. */
+    private function isBackendRequest(): bool
+    {
+        try {
+            $uri = \Okay\Core\Request::getRequestUri();
+            if ($uri !== '' && (str_starts_with($uri, 'backend') || str_starts_with($uri, '/backend'))) {
+                return true;
+            }
+        } catch (\Throwable) {
+            // Ignore errors
+        }
+
+        if (!empty($_GET['controller']) && is_string($_GET['controller'])) {
+            $ctrl = (string)$_GET['controller'];
+            // Большинство админ-контроллеров имеют такой паттерн
+            if (str_starts_with($ctrl, 'Sviat.') || str_contains($ctrl, 'Admin')) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function getContext(): array
@@ -435,12 +453,7 @@ class RedisCacheService
         }
     }
 
-    /**
-     * Batch GET in one roundtrip.
-     *
-     * @param string[] $keys
-     * @return array<string, mixed|null> Map key => value|null.
-     */
+    /** Отримати кілька значень за один запит. */
     public function mGet(array $keys): array
     {
         $keys = array_values(array_filter(array_map('strval', $keys), static function ($k) {
@@ -517,7 +530,7 @@ class RedisCacheService
         return $result;
     }
 
-    /** Safe unserialize with allowed class whitelist. */
+    /** Safe unserialize with allowed class RedisCacheService. */
     private function safeUnserialize(string $data)
     {
         // Convert warnings to exceptions on invalid payload.
@@ -721,17 +734,193 @@ class RedisCacheService
         }
     }
 
+    /** Отримати TTL (час життя) кешу з налаштувань. */
     public function getHelperTtl(string $helperKey): ?int
     {
-        if (array_key_exists($helperKey, $this->helperTtlCache)) {
+        if (\array_key_exists($helperKey, $this->helperTtlCache)) {
             return $this->helperTtlCache[$helperKey];
         }
 
         $value = $this->settings->get('sviat__redis__ttl__' . $helperKey);
-        $result = $value !== null && $value !== '' ? (int) $value : null;
+        $result = $value !== null && $value !== '' ? (int)$value : null;
         $this->helperTtlCache[$helperKey] = $result;
 
         return $result;
+    }
+
+    /** Очистити весь кеш товарів. */
+    public function invalidateProductCaches(): void
+    {
+        if (!$this->isEnabled()) {
+            return;
+        }
+
+        $client = $this->initClient();
+        if (!$client) {
+            return;
+        }
+
+        try {
+            // Повна очистка всіх товарів
+            $this->bumpGlobalVariantsVersion();
+
+            // Очистити ВСІ кеші товарів
+            $keys = [
+                'helpers:products_get_list:*',
+                'helpers:product_attach_variants:*',
+                'helpers:product_attach_images:*',
+                'helpers:product_attach_features:*',
+                'helpers:products_attach_images:*',
+                'helpers:products_attach_main_images:*',
+            ];
+            $this->deleteKeysByPattern($client, $keys);
+        } catch (\Throwable $e) {
+            $this->lastError = $e->getMessage();
+        }
+    }
+
+    /** Очистити весь кеш категорій. */
+    public function invalidateCategoryCaches(): void
+    {
+        if (!$this->isEnabled()) {
+            return;
+        }
+
+        $client = $this->initClient();
+        if (!$client) {
+            return;
+        }
+
+        try {
+            $patterns = [
+                'helpers:catalog_features:*',
+                'helpers:categories_catalog_features:*',
+                'helpers:categories_get_list:*',
+            ];
+
+            $this->deleteKeysByPattern($client, $patterns);
+            // Також очистити товари, оскільки вони пов'язані з категоріями
+            $this->invalidateProductCaches();
+        } catch (\Throwable $e) {
+            $this->lastError = $e->getMessage();
+        }
+    }
+
+    /** Очистити весь кеш брендів. */
+    public function invalidateBrandCaches(): void
+    {
+        if (!$this->isEnabled()) {
+            return;
+        }
+
+        $client = $this->initClient();
+        if (!$client) {
+            return;
+        }
+
+        try {
+            $patterns = [
+                'helpers:brands_get_list:*',
+                'helpers:filter_get_brands:*',
+                'helpers:catalog_features:*',
+                'helpers:catalog_features_filter:*',
+            ];
+
+            $this->deleteKeysByPattern($client, $patterns);
+            // Також очистити товари
+            $this->invalidateProductCaches();
+        } catch (\Throwable $e) {
+            $this->lastError = $e->getMessage();
+        }
+    }
+
+    /**
+     * Инвалидирует кеш авторов и блога.
+     */
+    public function invalidateBlogCaches(): void
+    {
+        if (!$this->isEnabled()) {
+            return;
+        }
+
+        $client = $this->initClient();
+        if (!$client) {
+            return;
+        }
+
+        try {
+            $patterns = [
+                'helpers:authors_get_list:*',
+                'helpers:blog_get_list:*',
+                'helpers:blog_attach_post_data:*',
+                'helpers:blog_entity_related_products:*',
+            ];
+
+            $this->deleteKeysByPattern($client, $patterns);
+        } catch (\Throwable $e) {
+            $this->lastError = $e->getMessage();
+        }
+    }
+
+    /** Очистити кеш валют та цін. */
+    public function invalidateMoneyCaches(): void
+    {
+        if (!$this->isEnabled()) {
+            return;
+        }
+
+        $client = $this->initClient();
+        if (!$client) {
+            return;
+        }
+
+        try {
+            $patterns = [
+                'helpers:money_currencies_list:*',
+            ];
+
+            $this->deleteKeysByPattern($client, $patterns);
+            // Також очистити товари, оскільки зміна курсу впливає на ціни
+            $this->invalidateProductCaches();
+        } catch (\Throwable $e) {
+            $this->lastError = $e->getMessage();
+        }
+    }
+
+    /** Видалити Redis ключи за шаблоном. */
+    private function deleteKeysByPattern(object $redis, array $patterns): int
+    {
+        $deleted = 0;
+        $config = $this->loadConfig();
+        $prefix = $config['prefix'] ?? 'okay:';
+
+        foreach ($patterns as $pattern) {
+            try {
+                // Видалити префікс з шаблону, якщо він є
+                $searchPattern = str_starts_with($pattern, $prefix)
+                    ? substr($pattern, strlen($prefix))
+                    : $pattern;
+
+                // Використовуємо SCAN + UNLINK для великих наборів даних
+                $iterator = null;
+                while (true) {
+                    $keys = $redis->scan($iterator, $searchPattern);
+                    if ($keys === false || $keys === []) {
+                        break;
+                    }
+                    if (is_array($keys) && count($keys) > 0) {
+                        $deleted += $redis->unlink(...$keys);
+                    }
+                    if ($iterator === 0 || $iterator === null) {
+                        break;
+                    }
+                }
+            } catch (\Throwable $e) {
+                $this->lastError = $e->getMessage();
+            }
+        }
+
+        return $deleted;
     }
 }
 

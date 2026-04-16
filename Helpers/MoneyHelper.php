@@ -25,7 +25,7 @@ class MoneyHelper extends \Okay\Helpers\MoneyHelper
         $this->redis = $redis;
     }
 
-    /** Load currencies from cache, fallback to DB. */
+    /** Отримати список валют з кешу. */
     private function getCurrenciesList(): array
     {
         if (!$this->redis->canCache('money_currencies_list')) {
@@ -40,16 +40,14 @@ class MoneyHelper extends \Okay\Helpers\MoneyHelper
 
         $currencies = $this->loadCurrenciesFromDb();
         if (!empty($currencies)) {
-            $ttl = $this->redis->getHelperTtl('money_currencies_list');
-            if ($ttl === null) {
-                $ttl = 3600; // Default TTL: 1 hour.
-            }
+            $ttl = $this->redis->getHelperTtl('money_currencies_list') ?? 3600;
             $this->redis->set($cacheKey, $currencies, $ttl);
         }
 
         return $currencies;
     }
 
+    /** Завантажити валюти з БД. */
     private function loadCurrenciesFromDb(): array
     {
         /** @var CurrenciesEntity $currenciesEntity */
@@ -57,12 +55,14 @@ class MoneyHelper extends \Okay\Helpers\MoneyHelper
         return $currenciesEntity->mappedBy('id')->find();
     }
 
+    /** Конвертувати ціну варіанта в основну валюту. */
     public function convertVariantPriceToMainCurrency($variant)
     {
         if (empty($variant)) {
             return ExtenderFacade::execute(__METHOD__, $variant, func_get_args());
         }
 
+        // Приховати ціну порівняння, якщо вона дорівнює ціні товару
         if ($this->settings->get('hide_equal_compare_price') && $variant->compare_price <= $variant->price) {
             $variant->compare_price = null;
         }

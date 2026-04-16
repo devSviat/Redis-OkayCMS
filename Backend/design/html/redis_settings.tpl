@@ -1,9 +1,9 @@
-{$meta_title = "Redis кеш хелперів" scope=global}
+{$meta_title = $btr->sviat_redis_settings scope=global}
 
 <div class="main_header">
     <div class="main_header__item">
         <div class="main_header__inner">
-            <div class="box_heading heading_page">Redis кеш хелперів</div>
+            <div class="box_heading heading_page">{$btr->sviat_redis_settings|escape}</div>
         </div>
     </div>
 </div>
@@ -22,14 +22,14 @@
             {if $test_result === true}
                 <div class="alert alert--success">
                     <div class="alert__content">
-                        <div class="alert__title">Підключення до Redis успішне</div>
+                        <div class="alert__title">{$btr->sviat_redis_connection_success|escape}</div>
                     </div>
                 </div>
             {/if}
             {if $test_result === false}
                 <div class="alert alert--warning">
                     <div class="alert__content">
-                        <div class="alert__title">Не вдалося підключитись до Redis</div>
+                        <div class="alert__title">{$btr->sviat_redis_connection_failed|escape}</div>
                         {if $test_error}<div class="alert__text">{$test_error|escape}</div>{/if}
                     </div>
                 </div>
@@ -43,13 +43,13 @@
     <div class="row">
         <div class="col-lg-3 col-md-4">
             <div class="boxed">
-                <div class="heading_box">Підключення до Redis</div>
+                <div class="heading_box">{$btr->sviat_redis_connection_box|escape}</div>
 
                 <div class="form-group">
                     <div class="activity_of_switch activity_of_switch--left">
                         <div class="activity_of_switch_item">
                             <div class="okay_switch clearfix">
-                                <label class="switch_label">Увімкнути Redis кеш</label>
+                                <label class="switch_label">{$btr->sviat_redis_enable_cache|escape}</label>
                                 <label class="switch switch-default">
                                     <input class="switch-input" name="enabled" value="1" type="checkbox" id="sviat_redis_enabled" {if $redis_enabled}checked{/if}>
                                     <span class="switch-label"></span>
@@ -61,44 +61,48 @@
                 </div>
 
                 <div class="form-group">
-                    <label class="heading_label">Host</label>
+                    <label class="heading_label">{$btr->sviat_redis_host|escape}</label>
                     <input type="text" class="form-control" name="host" value="{$redis_host|escape}">
                 </div>
 
                 <div class="form-group">
-                    <label class="heading_label">Port</label>
+                    <label class="heading_label">{$btr->sviat_redis_port|escape}</label>
                     <input type="number" class="form-control" name="port" value="{$redis_port|escape}">
                 </div>
 
                 <div class="form-group">
-                    <label class="heading_label">DB</label>
+                    <label class="heading_label">{$btr->sviat_redis_db|escape}</label>
                     <input type="number" class="form-control" name="db" value="{$redis_db|escape}">
                 </div>
 
                 <div class="form-group">
-                    <label class="heading_label">Username</label>
-                    <input type="text" class="form-control" name="username" value="{$redis_username|escape}" placeholder="ACL (Redis 6+), порожньо = лише пароль" autocomplete="off">
+                    <label class="heading_label">{$btr->sviat_redis_username|escape}</label>
+                    <input type="text" class="form-control" name="username" value="{$redis_username|escape}" placeholder="{$btr->sviat_redis_username_placeholder|escape}" autocomplete="off">
                 </div>
 
                 <div class="form-group">
-                    <label class="heading_label">Password</label>
-                    <input type="password" class="form-control" name="password" value="{$redis_password|escape}" placeholder="Порожньо = без авторизації" autocomplete="new-password">
+                    <label class="heading_label">{$btr->sviat_redis_password|escape}</label>
+                    <input type="password" class="form-control" name="password" value="{$redis_password|escape}" placeholder="{$btr->sviat_redis_password_placeholder|escape}" autocomplete="new-password">
                 </div>
 
                 <div class="form-group">
-                    <label class="heading_label">Префікс ключів</label>
+                    <label class="heading_label">{$btr->sviat_redis_key_prefix|escape}</label>
                     <input type="text" class="form-control" name="prefix" value="{$redis_prefix|escape}">
                 </div>
 
                 <div class="form-group">
-                    <label class="heading_label">TTL за замовчуванням (сек)</label>
+                    <label class="heading_label">{$btr->sviat_redis_default_ttl|escape}</label>
                     <input type="number" class="form-control" name="default_ttl" value="{$redis_default_ttl|escape}">
                 </div>
 
                 <div class="form-group">
-                    <label class="heading_label">Секрет підпису кешу (HMAC)</label>
-                    <input type="password" class="form-control" name="cache_hmac_secret" value="{$redis_cache_hmac_secret|escape}" placeholder="Порожньо = як раніше без підпису" autocomplete="new-password">
-                    <span class="hint d-block mt_5 text_small text_gray">Якщо вказати довгий випадковий рядок, значення з set/get/mGet підписуються перед записом у Redis; сторонні записи без підпису ігноруються (<code>unserialize</code> лише після перевірки). Існуючі ключі до закінчення TTL слід оновити або очистити кеш.</span>
+                    <div class="heading_label">
+                        <span>{$btr->sviat_redis_cache_hmac_secret|escape}</span>
+                        <i class="fn_tooltips" title="{$btr->sviat_redis_cache_hmac_secret_hint|escape}">
+                            {include file='svg_icon.tpl' svgId='icon_tooltips'}
+                        </i>
+                    </div>
+                    <input type="password" class="form-control" name="cache_hmac_secret" value="{$redis_cache_hmac_secret|escape}" placeholder="{$btr->sviat_redis_cache_hmac_secret_placeholder|escape}" autocomplete="new-password">
                 </div>
 
                 <div class="form-group">
@@ -106,30 +110,30 @@
                         {$btr->general_apply|default:"Зберегти"|escape}
                     </button>
                     <button type="submit" name="action" value="test" class="btn btn_secondary">
-                        Протестувати підключення
+                        {$btr->sviat_redis_test_connection|escape}
                     </button>
                 </div>
             </div>
 
             <div class="boxed">
-                <div class="heading_box">Стан кешу</div>
+                <div class="heading_box">{$btr->sviat_redis_cache_status|escape}</div>
                 {if $redis_stats.enabled && $redis_stats.connected}
-                    <p>Кількість ключів у БД: <strong>{$redis_stats.db_size}</strong></p>
+                    <p>{$btr->sviat_redis_db_keys_count|escape}: <strong>{$redis_stats.db_size}</strong></p>
                     {if $redis_stats.used_memory}
-                        <p>Використана пам'ять: <strong>{$redis_stats.used_memory|escape}</strong></p>
+                        <p>{$btr->sviat_redis_used_memory|escape}: <strong>{$redis_stats.used_memory|escape}</strong></p>
                     {/if}
                     <button type="submit" name="action" value="flush_helpers" class="btn btn_warning">
-                        Очистити весь кеш Redis (поточна DB)
+                        {$btr->sviat_redis_flush_current_db|escape}
                     </button>
                 {else}
-                    <p>Redis недоступний{if $redis_stats.error}: {$redis_stats.error|escape}{/if}</p>
+                    <p>{$btr->sviat_redis_unavailable|escape}{if $redis_stats.error}: {$redis_stats.error|escape}{/if}</p>
                 {/if}
             </div>
         </div>
 
         <div class="col-lg-9 col-md-8">
             <div class="boxed">
-                <div class="heading_box">TTL для хелперів</div>
+                <div class="heading_box">{$btr->sviat_redis_helpers_ttl|escape}</div>
 
                 {* ProductsHelper — 4 поля в один ряд на великому екрані *}
                 <div class="row">

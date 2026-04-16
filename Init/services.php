@@ -35,6 +35,12 @@ use Okay\Modules\Sviat\Redis\Helpers\RelatedProductsHelper;
 use Okay\Modules\Sviat\Redis\Backend\Controllers\RedisSettingsAdmin;
 use Okay\Modules\Sviat\Redis\Extenders\VariantsCacheExtender;
 use Okay\Modules\Sviat\Redis\Extenders\BlogRelatedCacheExtender;
+use Okay\Modules\Sviat\Redis\Extenders\ProductCacheInvalidator;
+use Okay\Modules\Sviat\Redis\Extenders\CategoryCacheInvalidator;
+use Okay\Modules\Sviat\Redis\Extenders\BrandCacheInvalidator;
+use Okay\Modules\Sviat\Redis\Extenders\BlogCacheInvalidator;
+use Okay\Modules\Sviat\Redis\Extenders\AuthorCacheInvalidator;
+use Okay\Modules\Sviat\Redis\Extenders\CurrencyCacheInvalidator;
 
 return [
     RedisCacheService::class => [
@@ -148,6 +154,48 @@ return [
 
     BlogRelatedCacheExtender::class => [
         'class' => BlogRelatedCacheExtender::class,
+        'arguments' => [
+            new SR(RedisCacheService::class),
+        ],
+    ],
+
+    ProductCacheInvalidator::class => [
+        'class' => ProductCacheInvalidator::class,
+        'arguments' => [
+            new SR(RedisCacheService::class),
+        ],
+    ],
+
+    CategoryCacheInvalidator::class => [
+        'class' => CategoryCacheInvalidator::class,
+        'arguments' => [
+            new SR(RedisCacheService::class),
+        ],
+    ],
+
+    BrandCacheInvalidator::class => [
+        'class' => BrandCacheInvalidator::class,
+        'arguments' => [
+            new SR(RedisCacheService::class),
+        ],
+    ],
+
+    BlogCacheInvalidator::class => [
+        'class' => BlogCacheInvalidator::class,
+        'arguments' => [
+            new SR(RedisCacheService::class),
+        ],
+    ],
+
+    AuthorCacheInvalidator::class => [
+        'class' => AuthorCacheInvalidator::class,
+        'arguments' => [
+            new SR(RedisCacheService::class),
+        ],
+    ],
+
+    CurrencyCacheInvalidator::class => [
+        'class' => CurrencyCacheInvalidator::class,
         'arguments' => [
             new SR(RedisCacheService::class),
         ],
