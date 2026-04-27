@@ -3,6 +3,7 @@
 namespace Okay\Modules\Sviat\Redis\Helpers;
 
 use Okay\Core\EntityFactory;
+use Okay\Core\Modules\Extender\ExtenderFacade;
 use Okay\Core\Settings;
 use Okay\Helpers\CatalogHelper;
 use Okay\Helpers\FilterHelper;
@@ -121,7 +122,14 @@ class ProductsHelper extends \Okay\Helpers\ProductsHelper
             }
         }
 
-        return $product;
+        // Fire extender chain registered on the base helper method so module
+        // extenders (DPB, Promo ...) get to enrich the
+        // product on single-product pages — same as the parent's tail call.
+        return ExtenderFacade::execute(
+            \Okay\Helpers\ProductsHelper::class . '::attachProductData',
+            $product,
+            func_get_args()
+        );
     }
 
     public function attachImages(array $products)
