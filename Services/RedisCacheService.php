@@ -6,20 +6,18 @@ use Okay\Core\Settings;
 
 class RedisCacheService
 {
+    private const VERSION_KEY_PREFIX = 'helpers:ver:';
+
     private Settings $settings;
     private $client = null;
     private bool $initialized = false;
     private ?string $lastError = null;
     private ?array $context = null;
 
-    // In-request memo to avoid duplicate Redis GET.
     private array $helperTtlCache = [];
-    private array $canCacheMemo = [];
-    private array $variantsVersionCache = []; // productId => int
-    private ?int $globalVariantsVersionCache = null;
-    private array $getMemo = []; // key => [bool $hasValue, mixed $value]
+    private array $versionMemo = [];
+    private array $getMemo = [];
 
-    // phpredis auth() signature cache.
     private static ?bool $authSupportsTwoArgs = null;
 
     public function __construct(Settings $settings)
@@ -30,119 +28,44 @@ class RedisCacheService
     private function loadConfig(): array
     {
         $password = trim((string) ($this->settings->get('sviat__redis__password') ?? ''));
-        $password = $password !== '' ? $password : null;
         $username = trim((string) ($this->settings->get('sviat__redis__username') ?? ''));
-        $username = $username !== '' ? $username : null;
 
         return [
             'enabled'  => (bool) $this->settings->get('sviat__redis__enabled'),
             'host'     => $this->settings->get('sviat__redis__host') ?: '127.0.0.1',
             'port'     => (int) ($this->settings->get('sviat__redis__port') ?: 6379),
             'db'       => (int) ($this->settings->get('sviat__redis__db') ?: 0),
-            'username' => $username,
-            'auth'     => $password,
+            'username' => $username !== '' ? $username : null,
+            'auth'     => $password !== '' ? $password : null,
             'prefix'   => $this->settings->get('sviat__redis__prefix') ?: 'okay:',
             'ttl'      => (int) ($this->settings->get('sviat__redis__default_ttl') ?: 600),
         ];
     }
 
-    /** Отримати HMAC-секрет для підпису кеша з налаштувань. */
-    private function getCacheHmacSecret(): string
-    {
-        $raw = $this->settings->get('sviat__redis__cache_hmac_secret');
-        if (!is_string($raw)) {
-            return '';
-        }
-        $s = trim($raw);
-
-        return $s;
-    }
-
-    /** Максимальний розмір даних у кешу (16 МБ). */
-    private const SIGNED_PAYLOAD_MAX_BYTES = 16777216;
-
-    /** Додати HMAC-підпис до серіалізованих даних. */
-    private function wrapSerializedPayload(string $serialized): string
-    {
-        $secret = $this->getCacheHmacSecret();
-        if ($secret === '') {
-            return $serialized;
-        }
-
-        $sig = hash_hmac('sha256', $serialized, $secret, true);
-
-        return 'v1' . pack('N', strlen($serialized)) . $sig . $serialized;
-    }
-
-    /** Перевірити та видалити HMAC-підпис з даних. */
-    private function unwrapSerializedPayload(string $data): ?string
-    {
-        $secret = $this->getCacheHmacSecret();
-        if ($secret === '') {
-            return $data;
-        }
-
-        $header = 2 + 4 + 32;
-        if (strlen($data) < $header) {
-            $this->lastError = 'Redis cache: truncated signed payload';
-
-            return null;
-        }
-        if (substr($data, 0, 2) !== 'v1') {
-            $this->lastError = 'Redis cache: unsigned or legacy payload rejected (HMAC увімкнено)';
-
-            return null;
-        }
-
-        $u = unpack('N', substr($data, 2, 4));
-        $len = (int) ($u[1] ?? 0);
-        if ($len < 1 || $len > self::SIGNED_PAYLOAD_MAX_BYTES) {
-            $this->lastError = 'Redis cache: invalid payload length';
-
-            return null;
-        }
-        if (strlen($data) !== $header + $len) {
-            $this->lastError = 'Redis cache: payload size mismatch';
-
-            return null;
-        }
-
-        $sig = substr($data, 6, 32);
-        $serialized = substr($data, $header);
-        $expected = hash_hmac('sha256', $serialized, $secret, true);
-        if (!hash_equals($expected, $sig)) {
-            $this->lastError = 'Redis cache: HMAC verification failed';
-
-            return null;
-        }
-
-        return $serialized;
-    }
-
     public function isEnabled(): bool
     {
-        $config = $this->loadConfig();
-        return $config['enabled'] && class_exists('\\Redis');
+        return (bool) $this->settings->get('sviat__redis__enabled') && class_exists('\\Redis');
     }
 
-    /** Ініціалізувати Redis клієнт. */
+    public function getLastError(): ?string
+    {
+        return $this->lastError;
+    }
+
     private function initClient(): ?object
     {
         if ($this->initialized) {
             return $this->client;
         }
         $this->initialized = true;
-
         if (!$this->isEnabled()) {
             $this->lastError = 'Redis disabled or extension not installed';
             return null;
         }
-
         $this->client = $this->connectBare(true);
         return $this->client;
     }
 
-    /** Authenticate with password or ACL credentials. */
     private function authenticateRedis(object $redis, ?string $username, ?string $password): bool
     {
         $user = $username !== null && trim($username) !== '' ? trim($username) : null;
@@ -151,47 +74,32 @@ class RedisCacheService
         if ($user === null && $pass === null) {
             return true;
         }
-
         if ($user === null) {
             return (bool) $redis->auth($pass);
         }
 
         $passStr = $pass ?? '';
-
         try {
             if (self::$authSupportsTwoArgs === null) {
                 $ref = new \ReflectionMethod($redis, 'auth');
                 self::$authSupportsTwoArgs = $ref->getNumberOfParameters() >= 2;
             }
-
             if (self::$authSupportsTwoArgs) {
                 return (bool) $redis->auth($user, $passStr);
             }
         } catch (\ReflectionException $e) {
-            // Ignore and fallback to raw AUTH.
+            // fallthrough
         }
-
         if (!method_exists($redis, 'rawCommand')) {
-            $this->lastError = 'Для Redis ACL потрібен phpredis з auth(username, password) або підтримкою rawCommand';
-
+            $this->lastError = 'Redis ACL requires phpredis with auth(username, password) or rawCommand support';
             return false;
         }
-
-        $result = $redis->rawCommand('AUTH', $user, $passStr);
-
-        return $result !== false;
+        return $redis->rawCommand('AUTH', $user, $passStr) !== false;
     }
 
-    /**
-     * Create Redis client by current settings.
-     *
-     * @param bool $applyKeyPrefix Enable OPT_PREFIX for client keys.
-     * @return object|null Redis client or null on failure.
-     */
     private function connectBare(bool $applyKeyPrefix = true)
     {
         $config = $this->loadConfig();
-
         try {
             if (!class_exists('\\Redis')) {
                 $this->lastError = 'Redis extension not loaded';
@@ -209,11 +117,9 @@ class RedisCacheService
                 }
                 return null;
             }
-            if ($config['db'] > 0) {
-                if (!$redis->select($config['db'])) {
-                    $this->lastError = 'Redis select DB failed';
-                    return null;
-                }
+            if ($config['db'] > 0 && !$redis->select($config['db'])) {
+                $this->lastError = 'Redis select DB failed';
+                return null;
             }
             if ($applyKeyPrefix && $config['prefix']) {
                 $optPrefix = defined('Redis::OPT_PREFIX') ? constant('Redis::OPT_PREFIX') : null;
@@ -228,145 +134,87 @@ class RedisCacheService
         }
     }
 
-    /** Перевірити отримано вірну відповідь від Redis PING. */
-    private function isPingSuccessful($response): bool
-    {
-        if ($response === true || $response === 1) {
-            return true;
-        }
-        if (is_string($response)) {
-            $s = strtoupper(trim($response));
-
-            return $s === 'PONG' || $s === '+PONG';
-        }
-
-        return false;
-    }
-
-    public function getLastError(): ?string
-    {
-        return $this->lastError;
-    }
-
-    /** Check connection. Can bypass "enabled" flag for admin test. */
     public function testConnection(bool $allowWhenDisabled = false): bool
     {
         $this->lastError = null;
-
         if (!$allowWhenDisabled && !$this->isEnabled()) {
             $this->lastError = 'Redis disabled or extension not installed';
             return false;
         }
-
         if (!class_exists('\\Redis')) {
             $this->lastError = 'Redis extension not loaded';
             return false;
         }
-
         $client = $this->connectBare(true);
         if (!$client) {
             return false;
         }
-
         try {
-            $ok = $this->isPingSuccessful($client->ping());
+            $resp = $client->ping();
+            $ok = $resp === true || $resp === 1
+                || (is_string($resp) && in_array(strtoupper(trim($resp)), ['PONG', '+PONG'], true));
             if (!$ok) {
                 $this->lastError = 'Unexpected PING response from Redis';
             }
-
             return $ok;
         } catch (\Throwable $e) {
             $this->lastError = $e->getMessage();
             return false;
         } finally {
-            try {
-                $client->close();
-            } catch (\Throwable $e) {
-                // Ignore close errors.
-            }
+            try { $client->close(); } catch (\Throwable $e) {}
         }
     }
 
-    public function makeKey(string $name, array $args = []): string
+    public function flushAll(): void
     {
-        $ctx = $this->getContext();
-        return 'helpers:' . $name
-            . ':l' . ($ctx['lang'] ?? '0')
-            . ':c' . ($ctx['currency'] ?? '0')
-            . ':g' . ($ctx['group'] ?? '0')
-            . ':' . md5(serialize($args));
-    }
-
-    /** Перевірити чи дозволено кешувати дані цього типу. */
-    public function canCache(string $name): bool
-    {
-        if (isset($this->canCacheMemo[$name])) {
-            return $this->canCacheMemo[$name];
-        }
-
         if (!$this->isEnabled()) {
-            return $this->canCacheMemo[$name] = false;
+            return;
         }
-
-        $name_lower = strtolower($name);
-
-        // Чутливі дані, які НІКОЛИ не слід кешувати
-        $sensitive_keywords = [
-            'order',      // замовлення (персональні дані)
-            'user',       // користувачі
-            'cart',       // кошик (персональний)
-            'wallet',     // гаманці (персональні)
-            'payment',    // платежі
-            'invoice',    // рахунки
-            'delivery',   // доставка (може містити адреси)
-            'address',    // адреси
-            'customer',   // покупці
-            'admin',      // адмін-панель
-            'statistic',  // статистика
-            'report',     // звіти
-            'import',     // імпорт
-            'export',     // експорт
-            'password',   // паролі
-            'token',      // токени
-        ];
-
-        foreach ($sensitive_keywords as $keyword) {
-            if (str_contains($name_lower, $keyword)) {
-                return $this->canCacheMemo[$name] = false;
-            }
+        $client = $this->connectBare(false);
+        if (!$client) {
+            return;
         }
-
-        // На бекенді: якщо це явно адмін-функція, не кешувати
-        $is_backend = $this->isBackendRequest();
-        if ($is_backend && str_contains($name_lower, 'admin')) {
-            return $this->canCacheMemo[$name] = false;
+        try {
+            $client->flushDB();
+            $this->versionMemo = [];
+            $this->getMemo = [];
+        } catch (\Throwable $e) {
+            $this->lastError = $e->getMessage();
+        } finally {
+            try { $client->close(); } catch (\Throwable $e) {}
         }
-
-        // Все інше можна кешувати
-        return $this->canCacheMemo[$name] = true;
     }
 
-    /** Перевірити чи це запит з адміні. */
-    private function isBackendRequest(): bool
+    public function getStats(): array
     {
+        $client = $this->initClient();
+        if (!$client) {
+            return ['enabled' => false, 'connected' => false, 'error' => $this->lastError];
+        }
         try {
-            $uri = \Okay\Core\Request::getRequestUri();
-            if ($uri !== '' && (str_starts_with($uri, 'backend') || str_starts_with($uri, '/backend'))) {
-                return true;
-            }
-        } catch (\Throwable) {
-            // Ignore errors
+            $info = $client->info();
+            return [
+                'enabled'   => true,
+                'connected' => true,
+                'db_size'   => $client->dbSize(),
+                'used_memory' => $info['used_memory_human'] ?? ($info['used_memory'] ?? null),
+                'raw_info'  => $info,
+            ];
+        } catch (\Throwable $e) {
+            $this->lastError = $e->getMessage();
+            return ['enabled' => true, 'connected' => false, 'error' => $this->lastError];
         }
+    }
 
-        if (!empty($_GET['controller']) && is_string($_GET['controller'])) {
-            $ctrl = (string)$_GET['controller'];
-            // Большинство админ-контроллеров имеют такой паттерн
-            if (str_starts_with($ctrl, 'Sviat.') || str_contains($ctrl, 'Admin')) {
-                return true;
-            }
+    public function getHelperTtl(string $helperKey): ?int
+    {
+        if (\array_key_exists($helperKey, $this->helperTtlCache)) {
+            return $this->helperTtlCache[$helperKey];
         }
-
-        return false;
+        $value = $this->settings->get('sviat__redis__ttl__' . $helperKey);
+        $result = $value !== null && $value !== '' ? (int) $value : null;
+        $this->helperTtlCache[$helperKey] = $result;
+        return $result;
     }
 
     private function getContext(): array
@@ -374,28 +222,21 @@ class RedisCacheService
         if ($this->context !== null) {
             return $this->context;
         }
-
         $langId = null;
         try {
             $sl = \Okay\Core\ServiceLocator::getInstance();
             if ($sl->hasService(\Okay\Core\Languages::class)) {
-                $languages = $sl->getService(\Okay\Core\Languages::class);
-                $langId = $languages->getLangId();
+                $langId = (int) $sl->getService(\Okay\Core\Languages::class)->getLangId();
             }
-        } catch (\Throwable $e) {
-            $langId = null;
-        }
+        } catch (\Throwable $e) {}
 
-        $currencyId = $_SESSION['currency_id'] ?? null;
-        $currencyId = $currencyId !== null ? (int) $currencyId : null;
-
+        $currencyId = isset($_SESSION['currency_id']) ? (int) $_SESSION['currency_id'] : 0;
         $groupId = 0;
         try {
             if (!empty($_SESSION['user_id'])) {
                 $sl = \Okay\Core\ServiceLocator::getInstance();
                 if ($sl->hasService(\Okay\Core\EntityFactory::class)) {
                     $ef = $sl->getService(\Okay\Core\EntityFactory::class);
-                    /** @var \Okay\Entities\UsersEntity $usersEntity */
                     $usersEntity = $ef->get(\Okay\Entities\UsersEntity::class);
                     $user = $usersEntity->get((int) $_SESSION['user_id']);
                     if (!empty($user) && isset($user->group_id)) {
@@ -403,26 +244,134 @@ class RedisCacheService
                     }
                 }
             }
-        } catch (\Throwable $e) {
-            $groupId = 0;
-        }
+        } catch (\Throwable $e) {}
 
-        $this->context = [
-            'lang' => $langId !== null ? (int) $langId : 0,
-            'currency' => $currencyId !== null ? (int) $currencyId : 0,
-            'group' => (int) $groupId,
-        ];
-
+        $this->context = ['lang' => $langId ?? 0, 'currency' => $currencyId, 'group' => $groupId];
         return $this->context;
+    }
+
+    public function makeVersionedKey(string $name, array $tags, array $args = []): string
+    {
+        $ctx = $this->getContext();
+        $tagSegment = '';
+        if ($tags !== []) {
+            $versions = $this->versions($tags);
+            $parts = [];
+            foreach ($tags as $tag) {
+                $parts[] = ':' . self::tagSegmentLabel($tag) . ($versions[$tag] ?? 0);
+            }
+            $tagSegment = implode('', $parts);
+        }
+        return 'helpers:' . $name
+            . ':l' . ($ctx['lang'] ?? 0)
+            . ':c' . ($ctx['currency'] ?? 0)
+            . ':g' . ($ctx['group'] ?? 0)
+            . $tagSegment
+            . ':' . md5(serialize($args));
+    }
+
+    private static function tagSegmentLabel(string $tag): string
+    {
+        $colon = strpos($tag, ':');
+        $head = $colon === false ? $tag : substr($tag, 0, $colon);
+        $tail = $colon === false ? '' : substr($tag, $colon + 1);
+        $shortHead = strlen($head) >= 2 ? $head[0] . $head[1] : $head;
+        if ($tail === 'global' || $tail === '') {
+            return $shortHead;
+        }
+        return $shortHead . preg_replace('/[^a-zA-Z0-9]/', '', $tail);
+    }
+
+    public function version(string $tag): int
+    {
+        if (!$this->isEnabled()) {
+            return 0;
+        }
+        if (\array_key_exists($tag, $this->versionMemo)) {
+            return $this->versionMemo[$tag];
+        }
+        $client = $this->initClient();
+        if (!$client) {
+            return $this->versionMemo[$tag] = 0;
+        }
+        try {
+            $val = $client->get(self::VERSION_KEY_PREFIX . $tag);
+            $result = ($val === false || $val === null || $val === '') ? 0 : (int) $val;
+            return $this->versionMemo[$tag] = $result;
+        } catch (\Throwable $e) {
+            $this->lastError = $e->getMessage();
+            return $this->versionMemo[$tag] = 0;
+        }
+    }
+
+    public function versions(array $tags): array
+    {
+        $tags = array_values(array_unique(array_filter(array_map('strval', $tags))));
+        if ($tags === []) {
+            return [];
+        }
+        $result = [];
+        $missing = [];
+        foreach ($tags as $tag) {
+            if (\array_key_exists($tag, $this->versionMemo)) {
+                $result[$tag] = $this->versionMemo[$tag];
+            } else {
+                $missing[] = $tag;
+            }
+        }
+        if ($missing === [] || !$this->isEnabled()) {
+            foreach ($missing as $tag) {
+                $result[$tag] = $this->versionMemo[$tag] = 0;
+            }
+            return $result;
+        }
+        $client = $this->initClient();
+        if (!$client) {
+            foreach ($missing as $tag) {
+                $result[$tag] = $this->versionMemo[$tag] = 0;
+            }
+            return $result;
+        }
+        try {
+            $keys = array_map(fn($t) => self::VERSION_KEY_PREFIX . $t, $missing);
+            $raw = $client->mGet($keys);
+            foreach ($missing as $i => $tag) {
+                $val = $raw[$i] ?? false;
+                $n = ($val === false || $val === null || $val === '') ? 0 : (int) $val;
+                $result[$tag] = $this->versionMemo[$tag] = $n;
+            }
+        } catch (\Throwable $e) {
+            $this->lastError = $e->getMessage();
+            foreach ($missing as $tag) {
+                $result[$tag] = $this->versionMemo[$tag] = 0;
+            }
+        }
+        return $result;
+    }
+
+    public function bump(string $tag): void
+    {
+        if (!$this->isEnabled()) {
+            return;
+        }
+        $client = $this->initClient();
+        if (!$client) {
+            return;
+        }
+        try {
+            $client->incr(self::VERSION_KEY_PREFIX . $tag);
+            unset($this->versionMemo[$tag]);
+        } catch (\Throwable $e) {
+            $this->lastError = $e->getMessage();
+        }
     }
 
     public function get(string $key)
     {
-        if (array_key_exists($key, $this->getMemo)) {
-            [$hasValue, $value] = $this->getMemo[$key];
-            return $hasValue ? $value : null;
+        if (\array_key_exists($key, $this->getMemo)) {
+            [$has, $val] = $this->getMemo[$key];
+            return $has ? $val : null;
         }
-
         $client = $this->initClient();
         if (!$client) {
             $this->getMemo[$key] = [false, null];
@@ -434,12 +383,7 @@ class RedisCacheService
                 $this->getMemo[$key] = [false, null];
                 return null;
             }
-            $serialized = $this->unwrapSerializedPayload((string) $data);
-            if ($serialized === null) {
-                $this->getMemo[$key] = [false, null];
-                return null;
-            }
-            $value = $this->safeUnserialize($serialized);
+            $value = $this->safeUnserialize((string) $data);
             if ($value === null) {
                 $this->getMemo[$key] = [false, null];
                 return null;
@@ -453,33 +397,25 @@ class RedisCacheService
         }
     }
 
-    /** Отримати кілька значень за один запит. */
     public function mGet(array $keys): array
     {
-        $keys = array_values(array_filter(array_map('strval', $keys), static function ($k) {
-            return $k !== '';
-        }));
+        $keys = array_values(array_filter(array_map('strval', $keys), static fn($k) => $k !== ''));
         if ($keys === []) {
             return [];
         }
-
         $result = [];
-
-        // Use in-request memo first.
         $needFetch = [];
         foreach ($keys as $k) {
-            if (array_key_exists($k, $this->getMemo)) {
-                [$hasValue, $value] = $this->getMemo[$k];
-                $result[$k] = $hasValue ? $value : null;
+            if (\array_key_exists($k, $this->getMemo)) {
+                [$has, $val] = $this->getMemo[$k];
+                $result[$k] = $has ? $val : null;
             } else {
                 $needFetch[] = $k;
             }
         }
-
         if ($needFetch === []) {
             return $result;
         }
-
         $client = $this->initClient();
         if (!$client) {
             foreach ($needFetch as $k) {
@@ -488,7 +424,6 @@ class RedisCacheService
             }
             return $result;
         }
-
         try {
             $raw = $client->mGet($needFetch);
             if (!is_array($raw)) {
@@ -501,16 +436,7 @@ class RedisCacheService
                     $result[$k] = null;
                     continue;
                 }
-                if (!is_string($data)) {
-                    $data = (string) $data;
-                }
-                $serialized = $this->unwrapSerializedPayload((string) $data);
-                if ($serialized === null) {
-                    $this->getMemo[$k] = [false, null];
-                    $result[$k] = null;
-                    continue;
-                }
-                $value = $this->safeUnserialize($serialized);
+                $value = $this->safeUnserialize((string) $data);
                 if ($value === null) {
                     $this->getMemo[$k] = [false, null];
                     $result[$k] = null;
@@ -526,14 +452,11 @@ class RedisCacheService
                 $result[$k] = null;
             }
         }
-
         return $result;
     }
 
-    /** Safe unserialize with allowed class RedisCacheService. */
     private function safeUnserialize(string $data)
     {
-        // Convert warnings to exceptions on invalid payload.
         set_error_handler(function ($severity, $message) {
             throw new \RuntimeException($message, (int) $severity);
         });
@@ -555,9 +478,8 @@ class RedisCacheService
         }
         $config = $this->loadConfig();
         $ttl = $ttl ?? $config['ttl'];
-
         try {
-            $data = $this->wrapSerializedPayload(serialize($value));
+            $data = serialize($value);
             if ($ttl > 0) {
                 $client->setex($key, $ttl, $data);
             } else {
@@ -568,359 +490,4 @@ class RedisCacheService
             $this->lastError = $e->getMessage();
         }
     }
-
-    /**
-     * Версія кешу variants для конкретного товару.
-     * Інвалідація: bumpProductVariantsVersion($productId)
-     */
-    public function getProductVariantsVersion(int $productId): int
-    {
-        if (!$this->isEnabled()) {
-            return 0;
-        }
-
-        if (array_key_exists($productId, $this->variantsVersionCache)) {
-            return (int) $this->variantsVersionCache[$productId];
-        }
-
-        $client = $this->initClient();
-        if (!$client) {
-            return 0;
-        }
-
-        $key = 'helpers:pvver:' . $productId;
-        try {
-            $val = $client->get($key);
-            if ($val === false || $val === null || $val === '') {
-                return 0;
-            }
-            $result = (int) $val;
-            $this->variantsVersionCache[$productId] = $result;
-            return $result;
-        } catch (\Throwable $e) {
-            $this->lastError = $e->getMessage();
-            return 0;
-        }
-    }
-
-    public function bumpProductVariantsVersion(int $productId): void
-    {
-        if (!$this->isEnabled()) {
-            return;
-        }
-        $client = $this->initClient();
-        if (!$client) {
-            return;
-        }
-
-        $key = 'helpers:pvver:' . $productId;
-        try {
-            // incr creates key if missing.
-            $client->incr($key);
-        } catch (\Throwable $e) {
-            $this->lastError = $e->getMessage();
-        }
-
-        // Drop local memo for this product.
-        unset($this->variantsVersionCache[$productId]);
-    }
-
-    /** Global invalidation for variants cache. */
-    public function bumpGlobalVariantsVersion(): void
-    {
-        if (!$this->isEnabled()) {
-            return;
-        }
-        $client = $this->initClient();
-        if (!$client) {
-            return;
-        }
-
-        $key = 'helpers:pvver:global';
-        try {
-            $client->incr($key);
-        } catch (\Throwable $e) {
-            $this->lastError = $e->getMessage();
-        }
-
-        // Drop local memo.
-        $this->globalVariantsVersionCache = null;
-    }
-
-    public function getGlobalVariantsVersion(): int
-    {
-        if (!$this->isEnabled()) {
-            return 0;
-        }
-
-        if ($this->globalVariantsVersionCache !== null) {
-            return $this->globalVariantsVersionCache;
-        }
-
-        $client = $this->initClient();
-        if (!$client) {
-            return 0;
-        }
-
-        $key = 'helpers:pvver:global';
-        try {
-            $val = $client->get($key);
-            if ($val === false || $val === null || $val === '') {
-                return 0;
-            }
-            $result = (int) $val;
-            $this->globalVariantsVersionCache = $result;
-            return $result;
-        } catch (\Throwable $e) {
-            $this->lastError = $e->getMessage();
-            return 0;
-        }
-    }
-
-    /** Clear all keys in current Redis DB. */
-    public function flushAll(): void
-    {
-        if (!$this->isEnabled()) {
-            return;
-        }
-
-        $client = $this->connectBare(false);
-        if (!$client) {
-            return;
-        }
-
-        try {
-            $client->flushDB();
-        } catch (\Throwable $e) {
-            $this->lastError = $e->getMessage();
-        } finally {
-            try {
-                $client->close();
-            } catch (\Throwable $e) {
-                // Ignore close errors.
-            }
-        }
-    }
-
-    public function getStats(): array
-    {
-        $client = $this->initClient();
-        if (!$client) {
-            return [
-                'enabled' => false,
-                'connected' => false,
-                'error' => $this->lastError,
-            ];
-        }
-
-        try {
-            $info = $client->info();
-            $dbSize = $client->dbSize();
-
-            return [
-                'enabled'   => true,
-                'connected' => true,
-                'db_size'   => $dbSize,
-                'used_memory' => isset($info['used_memory_human']) ? $info['used_memory_human'] : ($info['used_memory'] ?? null),
-                'raw_info'  => $info,
-            ];
-        } catch (\Throwable $e) {
-            $this->lastError = $e->getMessage();
-            return [
-                'enabled' => true,
-                'connected' => false,
-                'error' => $this->lastError,
-            ];
-        }
-    }
-
-    /** Отримати TTL (час життя) кешу з налаштувань. */
-    public function getHelperTtl(string $helperKey): ?int
-    {
-        if (\array_key_exists($helperKey, $this->helperTtlCache)) {
-            return $this->helperTtlCache[$helperKey];
-        }
-
-        $value = $this->settings->get('sviat__redis__ttl__' . $helperKey);
-        $result = $value !== null && $value !== '' ? (int)$value : null;
-        $this->helperTtlCache[$helperKey] = $result;
-
-        return $result;
-    }
-
-    /** Очистити весь кеш товарів. */
-    public function invalidateProductCaches(): void
-    {
-        if (!$this->isEnabled()) {
-            return;
-        }
-
-        $client = $this->initClient();
-        if (!$client) {
-            return;
-        }
-
-        try {
-            // Повна очистка всіх товарів
-            $this->bumpGlobalVariantsVersion();
-
-            // Очистити ВСІ кеші товарів
-            $keys = [
-                'helpers:products_get_list:*',
-                'helpers:product_attach_variants:*',
-                'helpers:product_attach_images:*',
-                'helpers:product_attach_features:*',
-                'helpers:products_attach_images:*',
-                'helpers:products_attach_main_images:*',
-            ];
-            $this->deleteKeysByPattern($client, $keys);
-        } catch (\Throwable $e) {
-            $this->lastError = $e->getMessage();
-        }
-    }
-
-    /** Очистити весь кеш категорій. */
-    public function invalidateCategoryCaches(): void
-    {
-        if (!$this->isEnabled()) {
-            return;
-        }
-
-        $client = $this->initClient();
-        if (!$client) {
-            return;
-        }
-
-        try {
-            $patterns = [
-                'helpers:catalog_features:*',
-                'helpers:categories_catalog_features:*',
-                'helpers:categories_get_list:*',
-            ];
-
-            $this->deleteKeysByPattern($client, $patterns);
-            // Також очистити товари, оскільки вони пов'язані з категоріями
-            $this->invalidateProductCaches();
-        } catch (\Throwable $e) {
-            $this->lastError = $e->getMessage();
-        }
-    }
-
-    /** Очистити весь кеш брендів. */
-    public function invalidateBrandCaches(): void
-    {
-        if (!$this->isEnabled()) {
-            return;
-        }
-
-        $client = $this->initClient();
-        if (!$client) {
-            return;
-        }
-
-        try {
-            $patterns = [
-                'helpers:brands_get_list:*',
-                'helpers:filter_get_brands:*',
-                'helpers:catalog_features:*',
-                'helpers:catalog_features_filter:*',
-            ];
-
-            $this->deleteKeysByPattern($client, $patterns);
-            // Також очистити товари
-            $this->invalidateProductCaches();
-        } catch (\Throwable $e) {
-            $this->lastError = $e->getMessage();
-        }
-    }
-
-    /**
-     * Инвалидирует кеш авторов и блога.
-     */
-    public function invalidateBlogCaches(): void
-    {
-        if (!$this->isEnabled()) {
-            return;
-        }
-
-        $client = $this->initClient();
-        if (!$client) {
-            return;
-        }
-
-        try {
-            $patterns = [
-                'helpers:authors_get_list:*',
-                'helpers:blog_get_list:*',
-                'helpers:blog_attach_post_data:*',
-                'helpers:blog_entity_related_products:*',
-            ];
-
-            $this->deleteKeysByPattern($client, $patterns);
-        } catch (\Throwable $e) {
-            $this->lastError = $e->getMessage();
-        }
-    }
-
-    /** Очистити кеш валют та цін. */
-    public function invalidateMoneyCaches(): void
-    {
-        if (!$this->isEnabled()) {
-            return;
-        }
-
-        $client = $this->initClient();
-        if (!$client) {
-            return;
-        }
-
-        try {
-            $patterns = [
-                'helpers:money_currencies_list:*',
-            ];
-
-            $this->deleteKeysByPattern($client, $patterns);
-            // Також очистити товари, оскільки зміна курсу впливає на ціни
-            $this->invalidateProductCaches();
-        } catch (\Throwable $e) {
-            $this->lastError = $e->getMessage();
-        }
-    }
-
-    /** Видалити Redis ключи за шаблоном. */
-    private function deleteKeysByPattern(object $redis, array $patterns): int
-    {
-        $deleted = 0;
-        $config = $this->loadConfig();
-        $prefix = $config['prefix'] ?? 'okay:';
-
-        foreach ($patterns as $pattern) {
-            try {
-                // Видалити префікс з шаблону, якщо він є
-                $searchPattern = str_starts_with($pattern, $prefix)
-                    ? substr($pattern, strlen($prefix))
-                    : $pattern;
-
-                // Використовуємо SCAN + UNLINK для великих наборів даних
-                $iterator = null;
-                while (true) {
-                    $keys = $redis->scan($iterator, $searchPattern);
-                    if ($keys === false || $keys === []) {
-                        break;
-                    }
-                    if (is_array($keys) && count($keys) > 0) {
-                        $deleted += $redis->unlink(...$keys);
-                    }
-                    if ($iterator === 0 || $iterator === null) {
-                        break;
-                    }
-                }
-            } catch (\Throwable $e) {
-                $this->lastError = $e->getMessage();
-            }
-        }
-
-        return $deleted;
-    }
 }
-

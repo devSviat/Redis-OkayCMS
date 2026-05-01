@@ -5,9 +5,10 @@ namespace Okay\Modules\Sviat\Redis\Extenders;
 use Okay\Core\EntityFactory;
 use Okay\Core\Modules\Extender\ExtensionInterface;
 use Okay\Entities\VariantsEntity;
+use Okay\Modules\Sviat\Redis\Services\CacheTags;
 use Okay\Modules\Sviat\Redis\Services\RedisCacheService;
 
-class VariantsCacheExtender implements ExtensionInterface
+class VariantsCacheInvalidator implements ExtensionInterface
 {
     private EntityFactory $entityFactory;
     private RedisCacheService $redis;
@@ -18,7 +19,6 @@ class VariantsCacheExtender implements ExtensionInterface
         $this->redis = $redis;
     }
 
-    /** Triggered after `VariantsEntity::update`. */
     public function onVariantsUpdate($output, $ids, $object): void
     {
         if (!$output) {
@@ -27,7 +27,6 @@ class VariantsCacheExtender implements ExtensionInterface
         $this->bumpByVariantIds((array) $ids);
     }
 
-    /** Triggered after `VariantsEntity::add`. */
     public function onVariantsAdd($output, $object): void
     {
         $id = (int) $output;
@@ -37,15 +36,12 @@ class VariantsCacheExtender implements ExtensionInterface
         $this->bumpByVariantIds([$id]);
     }
 
-    /** Triggered after `VariantsEntity::delete`. */
     public function onVariantsDelete($output, $ids): void
     {
         if (!$output) {
             return;
         }
-
-        // After delete product_id may be unavailable, so use global invalidation.
-        $this->redis->bumpGlobalVariantsVersion();
+        $this->redis->bump(CacheTags::PRODUCTS_ALL);
     }
 
     private function bumpByVariantIds(array $variantIds): void
@@ -54,24 +50,20 @@ class VariantsCacheExtender implements ExtensionInterface
         if (empty($variantIds)) {
             return;
         }
-
         /** @var VariantsEntity $variantsEntity */
         $variantsEntity = $this->entityFactory->get(VariantsEntity::class);
         $variants = $variantsEntity->find(['id' => $variantIds]);
         if (empty($variants)) {
             return;
         }
-
         $productIds = [];
-        foreach ($variants as $variant) {
-            if (!empty($variant->product_id)) {
-                $productIds[(int) $variant->product_id] = (int) $variant->product_id;
+        foreach ($variants as $v) {
+            if (!empty($v->product_id)) {
+                $productIds[(int) $v->product_id] = (int) $v->product_id;
             }
         }
-
-        foreach ($productIds as $productId) {
-            $this->redis->bumpProductVariantsVersion((int) $productId);
+        foreach ($productIds as $pid) {
+            $this->redis->bump(CacheTags::product($pid));
         }
     }
 }
-

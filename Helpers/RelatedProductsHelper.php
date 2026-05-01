@@ -3,6 +3,8 @@
 namespace Okay\Modules\Sviat\Redis\Helpers;
 
 use Okay\Core\Entity\RelatedProductsInterface;
+use Okay\Core\Modules\Extender\ExtenderFacade;
+use Okay\Modules\Sviat\Redis\Services\CacheTags;
 use Okay\Modules\Sviat\Redis\Services\RedisCacheService;
 
 class RelatedProductsHelper extends \Okay\Helpers\RelatedProductsHelper
@@ -19,20 +21,24 @@ class RelatedProductsHelper extends \Okay\Helpers\RelatedProductsHelper
 
     public function getRelatedProductsList(RelatedProductsInterface $relatedObjectsEntity, array $filter)
     {
-        if (!$this->redis->canCache('related_products_list')) {
+        if (!$this->redis->isEnabled()) {
             return parent::getRelatedProductsList($relatedObjectsEntity, $filter);
         }
-
-        // Include entity class to avoid key collisions.
-        $key = $this->redis->makeKey('related_products_list', [get_class($relatedObjectsEntity), $filter]);
+        $key = $this->redis->makeVersionedKey(
+            'related_products_list',
+            [CacheTags::PRODUCTS_ALL, CacheTags::PRODUCTS_LIST],
+            [get_class($relatedObjectsEntity), $filter]
+        );
         $cached = $this->redis->get($key);
         if (is_array($cached)) {
-            return $cached;
+            return ExtenderFacade::execute(
+                \Okay\Helpers\RelatedProductsHelper::class . '::getRelatedProductsList',
+                $cached,
+                func_get_args()
+            );
         }
-
         $result = parent::getRelatedProductsList($relatedObjectsEntity, $filter);
         $this->redis->set($key, $result, $this->redis->getHelperTtl('related_products_list') ?? 600);
         return $result;
     }
 }
-

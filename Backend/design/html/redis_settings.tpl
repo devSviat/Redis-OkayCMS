@@ -96,16 +96,6 @@
                 </div>
 
                 <div class="form-group">
-                    <div class="heading_label">
-                        <span>{$btr->sviat_redis_cache_hmac_secret|escape}</span>
-                        <i class="fn_tooltips" title="{$btr->sviat_redis_cache_hmac_secret_hint|escape}">
-                            {include file='svg_icon.tpl' svgId='icon_tooltips'}
-                        </i>
-                    </div>
-                    <input type="password" class="form-control" name="cache_hmac_secret" value="{$redis_cache_hmac_secret|escape}" placeholder="{$btr->sviat_redis_cache_hmac_secret_placeholder|escape}" autocomplete="new-password">
-                </div>
-
-                <div class="form-group">
                     <button type="submit" name="action" value="save" class="btn btn_blue">
                         {$btr->general_apply|default:"Зберегти"|escape}
                     </button>

@@ -3,6 +3,7 @@
 namespace Okay\Modules\Sviat\Redis\Extenders;
 
 use Okay\Core\Modules\Extender\ExtensionInterface;
+use Okay\Modules\Sviat\Redis\Services\CacheTags;
 use Okay\Modules\Sviat\Redis\Services\RedisCacheService;
 
 class BlogRelatedCacheExtender implements ExtensionInterface
@@ -17,11 +18,15 @@ class BlogRelatedCacheExtender implements ExtensionInterface
     /** Cache wrapper for `BlogEntity::getRelatedProducts`. */
     public function getRelatedProducts($output, array $filter = [])
     {
-        if (!$this->redis->canCache('blog_entity_related_products')) {
+        if (!$this->redis->isEnabled()) {
             return $output;
         }
 
-        $key = $this->redis->makeKey('blog_entity_related_products', [$filter]);
+        $key = $this->redis->makeVersionedKey(
+            'blog_entity_related_products',
+            [CacheTags::AUTHORS_BLOG, CacheTags::PRODUCTS_ALL],
+            [$filter]
+        );
         $cached = $this->redis->get($key);
         if (is_array($cached)) {
             return $cached;
@@ -33,4 +38,3 @@ class BlogRelatedCacheExtender implements ExtensionInterface
         return $output;
     }
 }
-

@@ -3,21 +3,29 @@
 namespace Okay\Modules\Sviat\Redis\Init;
 
 use Okay\Core\Modules\AbstractInit;
-use Okay\Entities\BlogEntity;
-use Okay\Entities\VariantsEntity;
-use Okay\Entities\ProductsEntity;
-use Okay\Entities\CategoriesEntity;
-use Okay\Entities\BrandsEntity;
 use Okay\Entities\AuthorsEntity;
+use Okay\Entities\BlogEntity;
+use Okay\Entities\BrandsEntity;
+use Okay\Entities\CategoriesEntity;
 use Okay\Entities\CurrenciesEntity;
-use Okay\Modules\Sviat\Redis\Extenders\BlogRelatedCacheExtender;
-use Okay\Modules\Sviat\Redis\Extenders\VariantsCacheExtender;
-use Okay\Modules\Sviat\Redis\Extenders\ProductCacheInvalidator;
-use Okay\Modules\Sviat\Redis\Extenders\CategoryCacheInvalidator;
-use Okay\Modules\Sviat\Redis\Extenders\BrandCacheInvalidator;
-use Okay\Modules\Sviat\Redis\Extenders\BlogCacheInvalidator;
+use Okay\Entities\FeaturesEntity;
+use Okay\Entities\FeaturesValuesEntity;
+use Okay\Entities\ImagesEntity;
+use Okay\Entities\ProductsEntity;
+use Okay\Entities\SpecialImagesEntity;
+use Okay\Entities\VariantsEntity;
 use Okay\Modules\Sviat\Redis\Extenders\AuthorCacheInvalidator;
+use Okay\Modules\Sviat\Redis\Extenders\BlogCacheInvalidator;
+use Okay\Modules\Sviat\Redis\Extenders\BlogRelatedCacheExtender;
+use Okay\Modules\Sviat\Redis\Extenders\BrandCacheInvalidator;
+use Okay\Modules\Sviat\Redis\Extenders\CategoryCacheInvalidator;
 use Okay\Modules\Sviat\Redis\Extenders\CurrencyCacheInvalidator;
+use Okay\Modules\Sviat\Redis\Extenders\FeaturesCacheInvalidator;
+use Okay\Modules\Sviat\Redis\Extenders\FeaturesValuesCacheInvalidator;
+use Okay\Modules\Sviat\Redis\Extenders\ImagesCacheInvalidator;
+use Okay\Modules\Sviat\Redis\Extenders\ProductCacheInvalidator;
+use Okay\Modules\Sviat\Redis\Extenders\SpecialImagesCacheInvalidator;
+use Okay\Modules\Sviat\Redis\Extenders\VariantsCacheInvalidator;
 
 class Init extends AbstractInit
 {
@@ -31,21 +39,13 @@ class Init extends AbstractInit
         $this->registerBackendController('RedisSettingsAdmin');
         $this->addBackendControllerPermission('RedisSettingsAdmin', 'settings');
 
-        // ============================================================
-        // CACHE CHAIN EXTENSIONS
-        // ============================================================
-
-        // Cache related blog products.
+        // Blog related products — ChainExtender (returns the cached value).
         $this->registerChainExtension(
             ['class' => BlogEntity::class, 'method' => 'getRelatedProducts'],
             ['class' => BlogRelatedCacheExtender::class, 'method' => 'getRelatedProducts']
         );
 
-        // ============================================================
-        // CACHE INVALIDATION EXTENSIONS (Queue = Side Effects)
-        // ============================================================
-
-        // Product cache invalidation on changes
+        // Products
         $this->registerQueueExtension(
             ['class' => ProductsEntity::class, 'method' => 'update'],
             ['class' => ProductCacheInvalidator::class, 'method' => 'onProductUpdate']
@@ -59,7 +59,7 @@ class Init extends AbstractInit
             ['class' => ProductCacheInvalidator::class, 'method' => 'onProductDelete']
         );
 
-        // Category cache invalidation on changes
+        // Categories
         $this->registerQueueExtension(
             ['class' => CategoriesEntity::class, 'method' => 'update'],
             ['class' => CategoryCacheInvalidator::class, 'method' => 'onCategoryUpdate']
@@ -73,7 +73,7 @@ class Init extends AbstractInit
             ['class' => CategoryCacheInvalidator::class, 'method' => 'onCategoryDelete']
         );
 
-        // Brand cache invalidation on changes
+        // Brands
         $this->registerQueueExtension(
             ['class' => BrandsEntity::class, 'method' => 'update'],
             ['class' => BrandCacheInvalidator::class, 'method' => 'onBrandUpdate']
@@ -87,7 +87,7 @@ class Init extends AbstractInit
             ['class' => BrandCacheInvalidator::class, 'method' => 'onBrandDelete']
         );
 
-        // Blog cache invalidation on changes
+        // Blog
         $this->registerQueueExtension(
             ['class' => BlogEntity::class, 'method' => 'update'],
             ['class' => BlogCacheInvalidator::class, 'method' => 'onBlogUpdate']
@@ -101,7 +101,7 @@ class Init extends AbstractInit
             ['class' => BlogCacheInvalidator::class, 'method' => 'onBlogDelete']
         );
 
-        // Author cache invalidation on changes
+        // Authors
         $this->registerQueueExtension(
             ['class' => AuthorsEntity::class, 'method' => 'update'],
             ['class' => AuthorCacheInvalidator::class, 'method' => 'onAuthorUpdate']
@@ -115,7 +115,7 @@ class Init extends AbstractInit
             ['class' => AuthorCacheInvalidator::class, 'method' => 'onAuthorDelete']
         );
 
-        // Currency cache invalidation on changes
+        // Currencies
         $this->registerQueueExtension(
             ['class' => CurrenciesEntity::class, 'method' => 'update'],
             ['class' => CurrencyCacheInvalidator::class, 'method' => 'onCurrencyUpdate']
@@ -129,19 +129,74 @@ class Init extends AbstractInit
             ['class' => CurrencyCacheInvalidator::class, 'method' => 'onCurrencyDelete']
         );
 
-        // Variants cache invalidation on changes (existing)
+        // Variants
         $this->registerQueueExtension(
             ['class' => VariantsEntity::class, 'method' => 'update'],
-            ['class' => VariantsCacheExtender::class, 'method' => 'onVariantsUpdate']
+            ['class' => VariantsCacheInvalidator::class, 'method' => 'onVariantsUpdate']
         );
         $this->registerQueueExtension(
             ['class' => VariantsEntity::class, 'method' => 'add'],
-            ['class' => VariantsCacheExtender::class, 'method' => 'onVariantsAdd']
+            ['class' => VariantsCacheInvalidator::class, 'method' => 'onVariantsAdd']
         );
         $this->registerQueueExtension(
             ['class' => VariantsEntity::class, 'method' => 'delete'],
-            ['class' => VariantsCacheExtender::class, 'method' => 'onVariantsDelete']
+            ['class' => VariantsCacheInvalidator::class, 'method' => 'onVariantsDelete']
+        );
+
+        // Images (NEW — fixes the stale-image bug)
+        $this->registerQueueExtension(
+            ['class' => ImagesEntity::class, 'method' => 'add'],
+            ['class' => ImagesCacheInvalidator::class, 'method' => 'onImageAdd']
+        );
+        $this->registerQueueExtension(
+            ['class' => ImagesEntity::class, 'method' => 'update'],
+            ['class' => ImagesCacheInvalidator::class, 'method' => 'onImageUpdate']
+        );
+        $this->registerQueueExtension(
+            ['class' => ImagesEntity::class, 'method' => 'delete'],
+            ['class' => ImagesCacheInvalidator::class, 'method' => 'onImageDelete']
+        );
+
+        // Special Images (NEW)
+        $this->registerQueueExtension(
+            ['class' => SpecialImagesEntity::class, 'method' => 'add'],
+            ['class' => SpecialImagesCacheInvalidator::class, 'method' => 'onSpecialImageAdd']
+        );
+        $this->registerQueueExtension(
+            ['class' => SpecialImagesEntity::class, 'method' => 'update'],
+            ['class' => SpecialImagesCacheInvalidator::class, 'method' => 'onSpecialImageUpdate']
+        );
+        $this->registerQueueExtension(
+            ['class' => SpecialImagesEntity::class, 'method' => 'delete'],
+            ['class' => SpecialImagesCacheInvalidator::class, 'method' => 'onSpecialImageDelete']
+        );
+
+        // Features (NEW)
+        $this->registerQueueExtension(
+            ['class' => FeaturesEntity::class, 'method' => 'add'],
+            ['class' => FeaturesCacheInvalidator::class, 'method' => 'onFeatureAdd']
+        );
+        $this->registerQueueExtension(
+            ['class' => FeaturesEntity::class, 'method' => 'update'],
+            ['class' => FeaturesCacheInvalidator::class, 'method' => 'onFeatureUpdate']
+        );
+        $this->registerQueueExtension(
+            ['class' => FeaturesEntity::class, 'method' => 'delete'],
+            ['class' => FeaturesCacheInvalidator::class, 'method' => 'onFeatureDelete']
+        );
+
+        // Features Values (NEW)
+        $this->registerQueueExtension(
+            ['class' => FeaturesValuesEntity::class, 'method' => 'add'],
+            ['class' => FeaturesValuesCacheInvalidator::class, 'method' => 'onFeatureValueAdd']
+        );
+        $this->registerQueueExtension(
+            ['class' => FeaturesValuesEntity::class, 'method' => 'update'],
+            ['class' => FeaturesValuesCacheInvalidator::class, 'method' => 'onFeatureValueUpdate']
+        );
+        $this->registerQueueExtension(
+            ['class' => FeaturesValuesEntity::class, 'method' => 'delete'],
+            ['class' => FeaturesValuesCacheInvalidator::class, 'method' => 'onFeatureValueDelete']
         );
     }
 }
-

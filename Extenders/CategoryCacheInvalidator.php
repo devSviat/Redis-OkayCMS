@@ -3,11 +3,9 @@
 namespace Okay\Modules\Sviat\Redis\Extenders;
 
 use Okay\Core\Modules\Extender\ExtensionInterface;
+use Okay\Modules\Sviat\Redis\Services\CacheTags;
 use Okay\Modules\Sviat\Redis\Services\RedisCacheService;
 
-/**
- * Інвалідує кеш категорій при їх редагуванні або видаленні.
- */
 class CategoryCacheInvalidator implements ExtensionInterface
 {
     private RedisCacheService $redis;
@@ -17,34 +15,29 @@ class CategoryCacheInvalidator implements ExtensionInterface
         $this->redis = $redis;
     }
 
-    /** Виконується після оновлення категорії. */
     public function onCategoryUpdate($output, $ids, $object): void
     {
         if (!$output) {
             return;
         }
-
-        // Очистити кеш категорій та продуктів
-        $this->redis->invalidateCategoryCaches();
+        $this->redis->bump(CacheTags::CATEGORIES);
+        $this->redis->bump(CacheTags::PRODUCTS_LIST);
     }
 
-    /** Виконується після додавання категорії. */
     public function onCategoryAdd($output, $object): void
     {
-        $id = (int)$output;
-        if ($id > 0) {
-            // Нова категорія може впливати на листинги
-            $this->redis->invalidateCategoryCaches();
+        if ((int) $output > 0) {
+            $this->redis->bump(CacheTags::CATEGORIES);
+            $this->redis->bump(CacheTags::PRODUCTS_LIST);
         }
     }
 
-    /** Виконується після видалення категорії. */
     public function onCategoryDelete($output, $ids): void
     {
         if (!$output) {
             return;
         }
-
-        $this->redis->invalidateCategoryCaches();
+        $this->redis->bump(CacheTags::CATEGORIES);
+        $this->redis->bump(CacheTags::PRODUCTS_LIST);
     }
 }

@@ -22,7 +22,6 @@ class RedisSettingsAdmin extends IndexAdmin
             $this->settings->set('sviat__redis__password', (string) ($this->request->post('password') ?? ''));
             $this->settings->set('sviat__redis__prefix', $this->request->post('prefix'));
             $this->settings->set('sviat__redis__default_ttl', (int)$this->request->post('default_ttl'));
-            $this->settings->set('sviat__redis__cache_hmac_secret', trim((string) ($this->request->post('cache_hmac_secret') ?? '')));
 
             $this->settings->set('sviat__redis__ttl__products_get_list', (int)$this->request->post('ttl_products_get_list'));
             $this->settings->set('sviat__redis__ttl__catalog_features', (int)$this->request->post('ttl_catalog_features'));
@@ -62,10 +61,6 @@ class RedisSettingsAdmin extends IndexAdmin
         $this->design->assign('redis_password', $this->settings->get('sviat__redis__password'));
         $this->design->assign('redis_prefix', $this->settings->get('sviat__redis__prefix') ?: 'okay:');
         $this->design->assign('redis_default_ttl', (int)($this->settings->get('sviat__redis__default_ttl') ?: 600));
-        $this->design->assign(
-            'redis_cache_hmac_secret',
-            (string) ($this->settings->get('sviat__redis__cache_hmac_secret') ?? '')
-        );
 
         $this->design->assign('ttl_products_get_list', (int)($this->settings->get('sviat__redis__ttl__products_get_list') ?: 300));
         $this->design->assign('ttl_catalog_features', (int)($this->settings->get('sviat__redis__ttl__catalog_features') ?: 600));

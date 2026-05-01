@@ -4,9 +4,11 @@ namespace Okay\Modules\Sviat\Redis\Helpers;
 
 use Okay\Core\Design;
 use Okay\Core\EntityFactory;
+use Okay\Core\Modules\Extender\ExtenderFacade;
 use Okay\Core\Settings;
 use Okay\Helpers\CatalogHelper;
 use Okay\Helpers\FilterHelper;
+use Okay\Modules\Sviat\Redis\Services\CacheTags;
 use Okay\Modules\Sviat\Redis\Services\RedisCacheService;
 
 class BrandsHelper extends \Okay\Helpers\BrandsHelper
@@ -27,19 +29,20 @@ class BrandsHelper extends \Okay\Helpers\BrandsHelper
 
     public function getList($filter = [], $sortName = null, $excludedFields = null)
     {
-        if (!$this->redis->canCache('brands_get_list')) {
+        if (!$this->redis->isEnabled()) {
             return parent::getList($filter, $sortName, $excludedFields);
         }
-
-        $cacheKey = $this->redis->makeKey('brands_get_list', [$filter, $sortName, $excludedFields]);
-        $cached = $this->redis->get($cacheKey);
+        $key = $this->redis->makeVersionedKey('brands_get_list', [CacheTags::BRANDS], [$filter, $sortName, $excludedFields]);
+        $cached = $this->redis->get($key);
         if (is_array($cached)) {
-            return $cached;
+            return ExtenderFacade::execute(
+                \Okay\Helpers\BrandsHelper::class . '::getList',
+                $cached,
+                func_get_args()
+            );
         }
-
         $brands = parent::getList($filter, $sortName, $excludedFields);
-        $this->redis->set($cacheKey, $brands, $this->redis->getHelperTtl('brands_get_list'));
+        $this->redis->set($key, $brands, $this->redis->getHelperTtl('brands_get_list'));
         return $brands;
     }
 }
-

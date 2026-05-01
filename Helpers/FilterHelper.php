@@ -5,9 +5,11 @@ namespace Okay\Modules\Sviat\Redis\Helpers;
 use Okay\Core\Design;
 use Okay\Core\EntityFactory;
 use Okay\Core\FrontTranslations;
+use Okay\Core\Modules\Extender\ExtenderFacade;
 use Okay\Core\Request;
 use Okay\Core\Router;
 use Okay\Core\Settings;
+use Okay\Modules\Sviat\Redis\Services\CacheTags;
 use Okay\Modules\Sviat\Redis\Services\RedisCacheService;
 
 class FilterHelper extends \Okay\Helpers\FilterHelper
@@ -29,19 +31,20 @@ class FilterHelper extends \Okay\Helpers\FilterHelper
 
     public function getBrands(array $brandsFilter): array
     {
-        if (!$this->redis->canCache('filter_get_brands')) {
+        if (!$this->redis->isEnabled()) {
             return parent::getBrands($brandsFilter);
         }
-
-        $cacheKey = $this->redis->makeKey('filter_get_brands', [$brandsFilter]);
-        $cached = $this->redis->get($cacheKey);
+        $key = $this->redis->makeVersionedKey('filter_get_brands', [CacheTags::BRANDS, CacheTags::PRODUCTS_LIST], [$brandsFilter]);
+        $cached = $this->redis->get($key);
         if (is_array($cached)) {
-            return $cached;
+            return ExtenderFacade::execute(
+                \Okay\Helpers\FilterHelper::class . '::getBrands',
+                $cached,
+                func_get_args()
+            );
         }
-
         $brands = parent::getBrands($brandsFilter);
-        $this->redis->set($cacheKey, $brands, $this->redis->getHelperTtl('filter_get_brands'));
+        $this->redis->set($key, $brands, $this->redis->getHelperTtl('filter_get_brands'));
         return $brands;
     }
 }
-

@@ -9,6 +9,7 @@ use Okay\Helpers\CatalogHelper;
 use Okay\Helpers\FilterHelper;
 use Okay\Helpers\MetadataHelpers\ProductMetadataHelper;
 use Okay\Helpers\MoneyHelper;
+use Okay\Modules\Sviat\Redis\Services\CacheTags;
 use Okay\Modules\Sviat\Redis\Services\RedisCacheService;
 
 class ProductsHelper extends \Okay\Helpers\ProductsHelper
@@ -24,14 +25,7 @@ class ProductsHelper extends \Okay\Helpers\ProductsHelper
         FilterHelper          $filterHelper,
         RedisCacheService     $redisCache
     ) {
-        parent::__construct(
-            $entityFactory,
-            $moneyHelper,
-            $settings,
-            $productMetadataHelper,
-            $catalogHelper,
-            $filterHelper
-        );
+        parent::__construct($entityFactory, $moneyHelper, $settings, $productMetadataHelper, $catalogHelper, $filterHelper);
         $this->redisCache = $redisCache;
     }
 
@@ -40,91 +34,65 @@ class ProductsHelper extends \Okay\Helpers\ProductsHelper
         if (empty($product->id)) {
             return parent::attachProductData($product);
         }
-
-        // Variants cache key includes invalidation versions.
-        $productId = (int) $product->id;
-        $variantsKey = null;
-        if ($this->redisCache->canCache('product_attach_variants')) {
-            $pv = $this->redisCache->getProductVariantsVersion($productId);
-            $gv = $this->redisCache->getGlobalVariantsVersion();
-            $variantsKey = $this->redisCache->makeKey('product_attach_variants', [$productId, $pv, $gv]);
+        if (!$this->redisCache->isEnabled()) {
+            return parent::attachProductData($product);
         }
 
-        $imagesKey = $this->redisCache->canCache('product_attach_images')
-            ? $this->redisCache->makeKey('product_attach_images', [$productId])
-            : null;
+        $productId = (int) $product->id;
+        $tags = [CacheTags::product($productId), CacheTags::PRODUCTS_ALL];
 
-        $featuresKey = $this->redisCache->canCache('product_attach_features')
-            ? $this->redisCache->makeKey('product_attach_features', [$productId])
-            : null;
+        $variantsKey = $this->redisCache->makeVersionedKey('product_attach_variants', $tags, [$productId]);
+        $imagesKey   = $this->redisCache->makeVersionedKey('product_attach_images',   $tags, [$productId]);
+        $featuresKey = $this->redisCache->makeVersionedKey('product_attach_features', $tags, [$productId]);
 
-        // Fetch all product-level cache keys in one request.
-        $keys = array_values(array_filter([$variantsKey, $imagesKey, $featuresKey]));
-        $cachedMap = $keys !== [] ? $this->redisCache->mGet($keys) : [];
+        $cached = $this->redisCache->mGet([$variantsKey, $imagesKey, $featuresKey]);
 
-        // Apply variants.
-        $variantsCached = $variantsKey !== null ? ($cachedMap[$variantsKey] ?? null) : null;
-        if (is_array($variantsCached) && array_key_exists('variants', $variantsCached)) {
+        // Variants
+        $variantsCached = $cached[$variantsKey] ?? null;
+        if (is_array($variantsCached) && \array_key_exists('variants', $variantsCached)) {
             $product->variants = $variantsCached['variants'];
-            if (array_key_exists('variant', $variantsCached)) {
+            if (\array_key_exists('variant', $variantsCached)) {
                 $product->variant = $variantsCached['variant'];
             }
         } else {
-            $products = [$productId => $product];
-            /** @var array $products */
-            $products = parent::attachVariants($products);
-            $product = reset($products);
-
-            if ($variantsKey !== null) {
-                $ttl = $this->redisCache->getHelperTtl('product_attach_variants') ?? 300;
-                $this->redisCache->set($variantsKey, [
-                    'variants' => $product->variants ?? null,
-                    'variant'  => $product->variant ?? null,
-                ], $ttl);
-            }
+            $tmp = [$productId => $product];
+            $tmp = parent::attachVariants($tmp);
+            $product = reset($tmp);
+            $ttl = $this->redisCache->getHelperTtl('product_attach_variants') ?? 300;
+            $this->redisCache->set($variantsKey, [
+                'variants' => $product->variants ?? null,
+                'variant'  => $product->variant ?? null,
+            ], $ttl);
         }
 
-        // Apply images.
-        $imagesCached = $imagesKey !== null ? ($cachedMap[$imagesKey] ?? null) : null;
+        // Images
+        $imagesCached = $cached[$imagesKey] ?? null;
         if (is_array($imagesCached)) {
-            if (array_key_exists('images', $imagesCached)) {
-                $product->images = $imagesCached['images'];
-            }
-            if (array_key_exists('image', $imagesCached)) {
-                $product->image = $imagesCached['image'];
-            }
+            if (\array_key_exists('images', $imagesCached)) { $product->images = $imagesCached['images']; }
+            if (\array_key_exists('image',  $imagesCached)) { $product->image  = $imagesCached['image']; }
         } else {
             $tmp = [$productId => $product];
             $tmp = $this->attachImages($tmp);
             $product = reset($tmp);
-
-            if ($imagesKey !== null) {
-                $ttl = $this->redisCache->getHelperTtl('product_attach_images') ?? 3600;
-                $this->redisCache->set($imagesKey, [
-                    'images' => $product->images ?? null,
-                    'image'  => $product->image ?? null,
-                ], $ttl);
-            }
+            $ttl = $this->redisCache->getHelperTtl('product_attach_images') ?? 3600;
+            $this->redisCache->set($imagesKey, [
+                'images' => $product->images ?? null,
+                'image'  => $product->image ?? null,
+            ], $ttl);
         }
 
-        // Apply features.
-        $featuresCached = $featuresKey !== null ? ($cachedMap[$featuresKey] ?? null) : null;
+        // Features
+        $featuresCached = $cached[$featuresKey] ?? null;
         if ($featuresCached !== null) {
             $product->features = $featuresCached;
         } else {
             $tmp = [$productId => $product];
             $tmp = $this->attachFeatures($tmp);
             $product = reset($tmp);
-
-            if ($featuresKey !== null) {
-                $ttl = $this->redisCache->getHelperTtl('product_attach_features') ?? 3600;
-                $this->redisCache->set($featuresKey, $product->features ?? null, $ttl);
-            }
+            $ttl = $this->redisCache->getHelperTtl('product_attach_features') ?? 3600;
+            $this->redisCache->set($featuresKey, $product->features ?? null, $ttl);
         }
 
-        // Fire extender chain registered on the base helper method so module
-        // extenders (DPB, Promo ...) get to enrich the
-        // product on single-product pages — same as the parent's tail call.
         return ExtenderFacade::execute(
             \Okay\Helpers\ProductsHelper::class . '::attachProductData',
             $product,
@@ -134,62 +102,48 @@ class ProductsHelper extends \Okay\Helpers\ProductsHelper
 
     public function attachImages(array $products)
     {
-        if (empty($products)) {
+        if (empty($products) || !$this->redisCache->isEnabled()) {
             return parent::attachImages($products);
         }
-
-        if (!$this->redisCache->canCache('products_attach_images')) {
-            return parent::attachImages($products);
-        }
-
         $productIds = array_map('intval', array_keys($products));
         sort($productIds);
-
-        // Avoid very large key combinations.
         if (count($productIds) > 20) {
             return parent::attachImages($products);
         }
-
-        $key = $this->redisCache->makeKey('products_attach_images', [$productIds]);
+        $tags = [CacheTags::PRODUCTS_ALL];
+        $key = $this->redisCache->makeVersionedKey('products_attach_images', $tags, [$productIds]);
         $cached = $this->redisCache->get($key);
+
         if (is_array($cached)) {
             foreach ($products as $pid => $p) {
                 $pid = (int) $pid;
                 if (isset($cached[$pid])) {
                     $p->images = $cached[$pid]['images'] ?? null;
-                    $p->image = $cached[$pid]['image'] ?? null;
+                    $p->image  = $cached[$pid]['image']  ?? null;
                 }
             }
-            return $products;
+            return ExtenderFacade::execute(
+                \Okay\Helpers\ProductsHelper::class . '::attachImages',
+                $products,
+                func_get_args()
+            );
         }
 
         $result = parent::attachImages($products);
-
         $payload = [];
         foreach ($result as $pid => $p) {
-            $pid = (int) $pid;
-            $payload[$pid] = [
-                'images' => $p->images ?? null,
-                'image'  => $p->image ?? null,
-            ];
+            $payload[(int) $pid] = ['images' => $p->images ?? null, 'image' => $p->image ?? null];
         }
-
         $ttl = $this->redisCache->getHelperTtl('products_attach_images') ?? 3600;
         $this->redisCache->set($key, $payload, $ttl);
-
         return $result;
     }
 
     public function attachMainImages(array $products)
     {
-        if (empty($products)) {
+        if (empty($products) || !$this->redisCache->isEnabled()) {
             return parent::attachMainImages($products);
         }
-
-        if (!$this->redisCache->canCache('products_attach_main_images')) {
-            return parent::attachMainImages($products);
-        }
-
         $imageIds = [];
         foreach ($products as $p) {
             if (!empty($p->main_image_id)) {
@@ -198,13 +152,13 @@ class ProductsHelper extends \Okay\Helpers\ProductsHelper
         }
         $imageIds = array_values(array_unique($imageIds));
         sort($imageIds);
-
         if (count($imageIds) > 50) {
             return parent::attachMainImages($products);
         }
-
-        $key = $this->redisCache->makeKey('products_attach_main_images', [$imageIds]);
+        $tags = [CacheTags::PRODUCTS_ALL];
+        $key = $this->redisCache->makeVersionedKey('products_attach_main_images', $tags, [$imageIds]);
         $cached = $this->redisCache->get($key);
+
         if (is_array($cached)) {
             foreach ($products as $p) {
                 $mid = !empty($p->main_image_id) ? (int) $p->main_image_id : 0;
@@ -212,44 +166,45 @@ class ProductsHelper extends \Okay\Helpers\ProductsHelper
                     $p->image = $cached[$mid];
                 }
             }
-            return $products;
+            return ExtenderFacade::execute(
+                \Okay\Helpers\ProductsHelper::class . '::attachMainImages',
+                $products,
+                func_get_args()
+            );
         }
 
         $result = parent::attachMainImages($products);
-
         $payload = [];
         foreach ($result as $p) {
             if (!empty($p->image) && !empty($p->image->id)) {
                 $payload[(int) $p->image->id] = $p->image;
             }
         }
-
         $ttl = $this->redisCache->getHelperTtl('products_attach_main_images') ?? 3600;
         $this->redisCache->set($key, $payload, $ttl);
-
         return $result;
     }
 
     public function getList($filter = [], $sortName = null, $excludedFields = null)
     {
-        if (!$this->redisCache->canCache('products_get_list')) {
+        if (!$this->redisCache->isEnabled()) {
             return parent::getList($filter, $sortName, $excludedFields);
         }
-
-        $ttl = $this->redisCache->getHelperTtl('products_get_list');
-        $key = $this->redisCache->makeKey('products_get_list', [$filter, $sortName, $excludedFields]);
-
+        $tags = [CacheTags::PRODUCTS_LIST, CacheTags::PRODUCTS_ALL];
+        $key  = $this->redisCache->makeVersionedKey('products_get_list', $tags, [$filter, $sortName, $excludedFields]);
         $cached = $this->redisCache->get($key);
         if ($cached !== null) {
-            return $cached;
+            return ExtenderFacade::execute(
+                \Okay\Helpers\ProductsHelper::class . '::getList',
+                $cached,
+                func_get_args()
+            );
         }
-
         $result = parent::getList($filter, $sortName, $excludedFields);
         if (!empty($result)) {
+            $ttl = $this->redisCache->getHelperTtl('products_get_list');
             $this->redisCache->set($key, $result, $ttl);
         }
-
         return $result;
     }
 }
-
