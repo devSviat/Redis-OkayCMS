@@ -1,12 +1,21 @@
-name: Bump version and release
+name: Реліз
+
+# Модель тегів:
+#   v<X.Y.Z>        — базовий реліз. Мусить працювати на обох рушіях.
+#   v<X.Y.Z>-fork   — збирається лише тоді, коли в репозиторії є гілка `fork`,
+#                     тобто коли справді з'явилися форк-специфічні зміни.
+#
+# Рушії неможливо розрізнити за номером версії: і форк, і сток звуть себе
+# 4.5.2 (Okay\Core\Config::$version). Тому кожна ціль нижче описана явно —
+# своїм репозиторієм, своїм ref і своєю версією PHP.
 
 on:
   workflow_dispatch:
     inputs:
       bump:
-        description: "Select version bump type?"
+        description: "Яку частину версії підняти?"
         required: true
-        default: "patch"
+        default: patch
         type: choice
         options:
           - major
@@ -21,111 +30,369 @@ permissions:
   contents: write
 
 jobs:
-  release:
+  lint:
+    name: Синтаксис PHP ${{ matrix.php }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 7.4 — нижня межа стоку, 8.0 — верхня, 8.5 — форк. Код модуля
+        # мусить бути чистим на всіх трьох, бо їде в один архів.
+        php: ['7.4', '8.0', '8.5']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          coverage: none
+
+      - run: |
+          set -euo pipefail
+          find . -path ./.git -prune -o -name '*.php' -print0 \
+            | xargs -0 -r -n1 -P4 php -l
+
+  verify:
+    name: ${{ matrix.target }} (PHP ${{ matrix.php }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: stock
+            repo: OkayCMS/OkayCMS
+            ref: '4.5.2'
+            # 8.0 — верхня версія, яку сток підтримує. Тести написані під
+            # PHP 8; синтаксис під 7.4 перевіряє окремий job lint.
+            php: '8.0'
+          - target: fork
+            repo: devSviat/OkayCMS
+            ref: main
+            php: '8.5'
+    steps:
+      - name: Забрати модуль
+        uses: actions/checkout@v4
+        with:
+          path: module
+
+      - name: Поставити PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: simplexml, xmlreader, pdo, json, curl, mbstring, zip, gd
+          coverage: none
+          tools: composer:v2
+
+      - name: Чи має модуль тести
+        id: tests
+        working-directory: module
+        run: |
+          set -euo pipefail
+          if [ -n "$(find tests -name '*Test.php' -print -quit 2>/dev/null)" ]; then
+            echo 'present=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'present=false' >> "$GITHUB_OUTPUT"
+            echo 'Тестів у модулі немає — прогін пропускається.'
+          fi
+
+      # Тести модуля посилаються на класи ядра, тож виконуються всередині
+      # справжнього рушія. Розкладка — та сама, що у верстаку okay-lab.
+      - name: Забрати рушій ${{ matrix.target }}
+        if: steps.tests.outputs.present == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ matrix.repo }}
+          ref: ${{ matrix.ref }}
+          path: engine
+
+      - name: Залежності рушія
+        if: steps.tests.outputs.present == 'true'
+        working-directory: engine
+        run: composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Вкласти модуль у рушій
+        if: steps.tests.outputs.present == 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p "engine/Okay/Modules/$VENDOR/$MODULE" "engine/tests/Modules/$VENDOR/$MODULE"
+          rsync -a --exclude=.git --exclude=.github --exclude=tests \
+            module/ "engine/Okay/Modules/$VENDOR/$MODULE/"
+          rsync -a module/tests/ "engine/tests/Modules/$VENDOR/$MODULE/"
+
+      - name: PHPUnit на ${{ matrix.target }}
+        if: steps.tests.outputs.present == 'true'
+        working-directory: engine
+        run: vendor/bin/phpunit "tests/Modules/$VENDOR/$MODULE"
+
+  release:
+    needs: [lint, verify]
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.bump.outputs.version }}
+      tag: ${{ steps.bump.outputs.tag }}
+      commit: ${{ steps.tag.outputs.commit }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Get latest tag
-        id: get_tag
+      # workflow_dispatch запускається з будь-якої гілки, а кроки нижче
+      # комітять і тегають ту, з якої запущено. Без цієї перевірки реліз із
+      # випадкової гілки виглядав би як звичайний.
+      - name: Реліз лише з основної гілки
         run: |
-          last_tag=$(git describe --tags --abbrev=0 || echo "v0.0.0")
-          echo "last_tag=$last_tag" >> $GITHUB_OUTPUT
-
-      - name: Bump version
-        id: bump
-        run: |
-          last=${{ steps.get_tag.outputs.last_tag }}
-          bump=${{ github.event.inputs.bump }}
-
-          ver=${last#v}
-          major=$(echo $ver | cut -d. -f1)
-          minor=$(echo $ver | cut -d. -f2)
-          patch=$(echo $ver | cut -d. -f3)
-
-          case $bump in
-            major)
-              major=$((major+1))
-              minor=0
-              patch=0
-              ;;
-            minor)
-              minor=$((minor+1))
-              patch=0
-              ;;
-            patch)
-              patch=$((patch+1))
-              ;;
-          esac
-
-          new_tag="v$major.$minor.$patch"
-          echo "new_tag=$new_tag" >> $GITHUB_OUTPUT
-
-      - name: Set build variables
-        id: vars
-        run: |
-          echo "module_path=${{ env.VENDOR }}/${{ env.MODULE }}" >> $GITHUB_OUTPUT
-          echo "zip_name=${{ env.MODULE }}-${{ steps.bump.outputs.new_tag }}.zip" >> $GITHUB_OUTPUT
-
-      - name: Check for changes since last tag
-        run: |
-          LAST_TAG=${{ steps.get_tag.outputs.last_tag }}
-          if [ "$LAST_TAG" != "v0.0.0" ] && [ "$(git rev-parse $LAST_TAG)" = "$(git rev-parse HEAD)" ]; then
-            echo "No new commits since $LAST_TAG. Aborting."
+          set -euo pipefail
+          default='${{ github.event.repository.default_branch }}'
+          if [ '${{ github.ref_name }}' != "$default" ]; then
+            echo "Реліз запускається лише з $default, а не з ${{ github.ref_name }}."
             exit 1
           fi
 
-      - name: Create new tag
+      - name: Порахувати нову версію
+        id: bump
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          NEW_TAG=${{ steps.bump.outputs.new_tag }}
-          if git rev-parse "$NEW_TAG" >/dev/null 2>&1; then
-            echo "Tag $NEW_TAG already exists. Deleting it."
-            git tag -d "$NEW_TAG"
-            git push origin --delete "$NEW_TAG" || true
-          fi
-          git tag "$NEW_TAG"
-          git push origin "$NEW_TAG"
+          set -euo pipefail
+          # Нумерацію веде лише базовий тег; варіант -fork за нею йде слідом.
+          last=$(git tag -l 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1 || true)
+          last=${last:-v0.0.0}
+          IFS=. read -r major minor patch <<< "${last#v}"
+          case '${{ inputs.bump }}' in
+            major) major=$((major + 1)); minor=0; patch=0 ;;
+            minor) minor=$((minor + 1)); patch=0 ;;
+            patch) patch=$((patch + 1)) ;;
+          esac
+          {
+            echo "version=$major.$minor.$patch"
+            echo "tag=v$major.$minor.$patch"
+            echo "last=$last"
+          } >> "$GITHUB_OUTPUT"
 
-      - name: Build module archive
+      - name: Чи є що релізити
         run: |
-          mkdir -p dist
-          mkdir -p temp_build/${{ steps.vars.outputs.module_path }}
-
-          rsync -av \
-            --exclude='.github' \
-            --exclude='.gitignore' \
-            --exclude='README.md' \
-            --exclude='temp_build' \
-            --exclude='dist' \
-            --exclude='.git' \
-            ./ temp_build/${{ steps.vars.outputs.module_path }}/
-
-          cd temp_build
-          zip -r ../dist/${{ steps.vars.outputs.zip_name }} ${{ steps.vars.outputs.module_path }}
-          cd ..
-          rm -rf temp_build
-
-      - name: Delete existing release if it exists
-        run: |
-          TAG=${{ steps.bump.outputs.new_tag }}
-          RELEASE_ID=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-            https://api.github.com/repos/${{ github.repository }}/releases/tags/$TAG | jq .id)
-          if [ "$RELEASE_ID" != "null" ]; then
-            curl -s -X DELETE -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-              https://api.github.com/repos/${{ github.repository }}/releases/$RELEASE_ID
+          set -euo pipefail
+          last='${{ steps.bump.outputs.last }}'
+          if [ "$last" != 'v0.0.0' ] \
+             && [ "$(git rev-parse "$last^{commit}")" = "$(git rev-parse HEAD)" ]; then
+            echo "Від $last немає нових комітів — реліз не потрібен."
+            exit 1
           fi
 
-      - name: Create GitHub release
+      # module.json — джерело версії для ядра: Installer пише її в БД, а від
+      # неї залежить, які update_* методи спрацюють при оновленні. Тег без
+      # цього кроку лишав би її позаду.
+      - name: Підняти версію в module.json
+        run: |
+          set -euo pipefail
+          v='${{ steps.bump.outputs.version }}'
+          sed -i -E 's/("version"[[:space:]]*:[[:space:]]*")[^"]*"/\1'"$v"'"/' Init/module.json
+          grep -qE "\"version\"[[:space:]]*:[[:space:]]*\"$v\"" Init/module.json
+          # python3, а не php: у цьому job'і setup-php не виконувався.
+          python3 -c 'import json; json.load(open("Init/module.json"))'
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git commit -am "Версія $v"
+          git push origin "HEAD:${{ github.ref_name }}"
+
+      - name: Поставити тег
+        id: tag
+        run: |
+          set -euo pipefail
+          git tag '${{ steps.bump.outputs.tag }}'
+          git push origin '${{ steps.bump.outputs.tag }}'
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Зібрати архів
+        run: |
+          set -euo pipefail
+          mkdir -p dist "build/$VENDOR/$MODULE"
+          rsync -a --exclude=.git --exclude=.github --exclude=.gitignore \
+            --exclude=README.md --exclude=tests --exclude=dist --exclude=build \
+            ./ "build/$VENDOR/$MODULE/"
+          (cd build && zip -rq "../dist/$MODULE-${{ steps.bump.outputs.tag }}.zip" "$VENDOR")
+
+      - name: Реліз
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.bump.outputs.new_tag }}
-          name: Release ${{ steps.bump.outputs.new_tag }}
+          tag_name: ${{ steps.bump.outputs.tag }}
+          name: ${{ steps.bump.outputs.tag }}
           generate_release_notes: true
-          files: dist/${{ steps.vars.outputs.zip_name }}
-          fail_on_unmatched_files: false
-          draft: false
-          prerelease: false
+          files: dist/*.zip
+
+  # Чи є взагалі форк-специфічні зміни. Окремим job'ом, бо результат потрібен
+  # у job-рівневих `if` наступних двох.
+  detect-fork:
+    needs: release
+    runs-on: ubuntu-latest
+    outputs:
+      present: ${{ steps.check.outputs.present }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Чи є гілка fork
+        id: check
+        run: |
+          set -euo pipefail
+          if git ls-remote --exit-code --heads origin fork >/dev/null 2>&1; then
+            echo 'present=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'present=false' >> "$GITHUB_OUTPUT"
+            echo 'Гілки fork немає — форк-специфічних змін теж, варіант не збирається.'
+          fi
+
+      # Явна відмова замість тихого злиття: якщо fork не містить щойно
+      # випущеного коміту, його архів був би старішим за базовий і мовчки
+      # роз'їхався б з ним.
+      - name: Переконатися, що fork містить базовий реліз
+        if: steps.check.outputs.present == 'true'
+        run: |
+          set -euo pipefail
+          base='${{ needs.release.outputs.commit }}'
+          git fetch origin fork
+          if ! git merge-base --is-ancestor "$base" origin/fork; then
+            echo "Гілка fork не містить коміт релізу $base."
+            echo 'Влий у неї основну гілку і запусти реліз ще раз.'
+            exit 1
+          fi
+
+  # Дзеркало job'а lint для гілки fork: її код так само їде в архів.
+  lint-fork:
+    needs: detect-fork
+    if: needs.detect-fork.outputs.present == 'true'
+    name: fork-гілка / синтаксис PHP ${{ matrix.php }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['7.4', '8.0', '8.5']
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fork
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          coverage: none
+
+      - run: |
+          set -euo pipefail
+          find . -path ./.git -prune -o -name '*.php' -print0 \
+            | xargs -0 -r -n1 -P4 php -l
+
+  # Той самий набір перевірок, що й для базового релізу, але на гілці fork.
+  # Без цього job'а рушій-специфічний код — єдиний, де різниця рушіїв взагалі
+  # може зламатися, — виходив би в реліз узагалі неперевіреним.
+  verify-fork:
+    needs: detect-fork
+    if: needs.detect-fork.outputs.present == 'true'
+    name: fork-гілка / ${{ matrix.target }} (PHP ${{ matrix.php }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: stock
+            repo: OkayCMS/OkayCMS
+            ref: '4.5.2'
+            # 8.0 — верхня версія, яку сток підтримує. Тести написані під
+            # PHP 8; синтаксис під 7.4 перевіряє окремий job lint.
+            php: '8.0'
+          - target: fork
+            repo: devSviat/OkayCMS
+            ref: main
+            php: '8.5'
+    steps:
+      - name: Забрати гілку fork
+        uses: actions/checkout@v4
+        with:
+          ref: fork
+          path: module
+
+      - name: Поставити PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: simplexml, xmlreader, pdo, json, curl, mbstring, zip, gd
+          coverage: none
+          tools: composer:v2
+
+      - name: Чи має модуль тести
+        id: tests
+        working-directory: module
+        run: |
+          set -euo pipefail
+          if [ -n "$(find tests -name '*Test.php' -print -quit 2>/dev/null)" ]; then
+            echo 'present=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'present=false' >> "$GITHUB_OUTPUT"
+            echo 'Тестів у модулі немає — прогін пропускається.'
+          fi
+
+      - name: Забрати рушій ${{ matrix.target }}
+        if: steps.tests.outputs.present == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ matrix.repo }}
+          ref: ${{ matrix.ref }}
+          path: engine
+
+      - name: Залежності рушія
+        if: steps.tests.outputs.present == 'true'
+        working-directory: engine
+        run: composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Вкласти модуль у рушій
+        if: steps.tests.outputs.present == 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p "engine/Okay/Modules/$VENDOR/$MODULE" "engine/tests/Modules/$VENDOR/$MODULE"
+          rsync -a --exclude=.git --exclude=.github --exclude=tests \
+            module/ "engine/Okay/Modules/$VENDOR/$MODULE/"
+          rsync -a module/tests/ "engine/tests/Modules/$VENDOR/$MODULE/"
+
+      - name: PHPUnit на ${{ matrix.target }}
+        if: steps.tests.outputs.present == 'true'
+        working-directory: engine
+        run: vendor/bin/phpunit "tests/Modules/$VENDOR/$MODULE"
+
+  release-fork:
+    needs: [release, detect-fork, lint-fork, verify-fork]
+    if: needs.detect-fork.outputs.present == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fork
+          fetch-depth: 0
+
+      - name: Вирівняти версію й поставити тег
+        run: |
+          set -euo pipefail
+          v='${{ needs.release.outputs.version }}'
+          sed -i -E 's/("version"[[:space:]]*:[[:space:]]*")[^"]*"/\1'"$v"'"/' Init/module.json
+          python3 -c 'import json; json.load(open("Init/module.json"))'
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git diff --quiet || git commit -am "Версія $v"
+          git push origin HEAD:fork
+          git tag '${{ needs.release.outputs.tag }}-fork'
+          git push origin '${{ needs.release.outputs.tag }}-fork'
+
+      - name: Зібрати архів
+        run: |
+          set -euo pipefail
+          mkdir -p dist "build/$VENDOR/$MODULE"
+          rsync -a --exclude=.git --exclude=.github --exclude=.gitignore \
+            --exclude=README.md --exclude=tests --exclude=dist --exclude=build \
+            ./ "build/$VENDOR/$MODULE/"
+          (cd build && zip -rq "../dist/$MODULE-${{ needs.release.outputs.tag }}-fork.zip" "$VENDOR")
+
+      - name: Реліз
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.release.outputs.tag }}-fork
+          name: ${{ needs.release.outputs.tag }}-fork
+          body: "Варіант для форку OkayCMS (PHP 8.5, Smarty 5). Базовий реліз — ${{ needs.release.outputs.tag }}."
+          files: dist/*.zip
