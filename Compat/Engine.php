@@ -10,44 +10,14 @@ namespace Okay\Modules\Sviat\Redis\Compat;
  * неправду. Надійно розрізняє рушії лише наявність конкретного класу, методу
  * чи сусіднього модуля.
  *
- * Обхідні шляхи додаються сюди й тільки сюди — щоб різниця рушіїв не
- * розповзалася по коду модуля.
+ * Тут лише запитання про можливості — без стану й без вводу-виводу, тому
+ * статика доречна. Усе, що читає стан запиту чи сесії, статикою бути не може:
+ * така залежність невидима в сигнатурі й непіддатна підміні в тесті. Для
+ * такого — порт і адаптери, а вибір реалізації робить Init/services.php
+ * (див. Compat\AdminIdentity).
  */
 final class Engine
 {
-    /**
-     * Логін менеджера, залогіненого в адмінці, або null.
-     *
-     * Єдина точка, де рушії справді розходяться. Там, де сесії вітрини й
-     * адмінки розділені на різні куки, $_SESSION вітрини бекендового логіна
-     * не бачить взагалі, і читати його треба окремо. Там, де сесія одна,
-     * логін лежить у $_SESSION['admin'] — саме його очікує ManagersEntity::get().
-     */
-    public static function adminLogin(): ?string
-    {
-        $sessionNames = 'Okay\Core\Security\SessionNames';
-
-        if (self::hasMethod($sessionNames, 'adminLogin')) {
-            return $sessionNames::adminLogin();
-        }
-
-        return empty($_SESSION['admin']) ? null : (string) $_SESSION['admin'];
-    }
-
-    /**
-     * Мажорна версія Smarty: 5 у форку, 3 у стоці, 0 якщо шаблонізатор ще не
-     * завантажений. Smarty 5 живе в неймспейсі, Smarty 3 — у корені; це
-     * найдешевша однозначна ознака рушія.
-     */
-    public static function smartyMajor(): int
-    {
-        if (class_exists('Smarty\Smarty')) {
-            return 5;
-        }
-
-        return class_exists('Smarty') ? 3 : 0;
-    }
-
     public static function hasClass(string $class): bool
     {
         return class_exists($class) || interface_exists($class);
