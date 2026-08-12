@@ -49,7 +49,8 @@ jobs:
 
       - run: |
           set -euo pipefail
-          find . -path ./.git -prune -o -name '*.php' -print0 \
+          # tests/ не лінтуються: в архів вони не їдуть і написані під PHP 8.
+          find . -path ./.git -prune -o -path ./tests -prune -o -name '*.php' -print0 \
             | xargs -0 -r -n1 -P4 php -l
 
   verify:
@@ -278,7 +279,8 @@ jobs:
 
       - run: |
           set -euo pipefail
-          find . -path ./.git -prune -o -name '*.php' -print0 \
+          # tests/ не лінтуються: в архів вони не їдуть і написані під PHP 8.
+          find . -path ./.git -prune -o -path ./tests -prune -o -name '*.php' -print0 \
             | xargs -0 -r -n1 -P4 php -l
 
   # Той самий набір перевірок, що й для базового релізу, але на гілці fork.
