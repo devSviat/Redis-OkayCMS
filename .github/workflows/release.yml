@@ -192,7 +192,8 @@ jobs:
           python3 -c 'import json; json.load(open("Init/module.json"))'
           git config user.name 'github-actions[bot]'
           git config user.email 'github-actions[bot]@users.noreply.github.com'
-          git commit -am "Версія $v"
+          # Версію могли підняти вручну в PR — тоді комітити нічого.
+          git diff --quiet || git commit -am "Версія $v"
           git push origin "HEAD:${{ github.ref_name }}"
 
       - name: Поставити тег
