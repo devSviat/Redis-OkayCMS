@@ -32,7 +32,7 @@ class FeaturesCacheInvalidator implements ExtensionInterface
 
     private function bumpAll(): void
     {
-        $this->redis->bump(CacheTags::PRODUCTS_ALL);
-        $this->redis->bump(CacheTags::PRODUCTS_LIST);
+        $this->redis->bumpOnce(CacheTags::PRODUCTS_ALL);
+        $this->redis->bumpOnce(CacheTags::PRODUCTS_LIST);
     }
 }

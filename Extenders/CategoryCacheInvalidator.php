@@ -20,15 +20,15 @@ class CategoryCacheInvalidator implements ExtensionInterface
         if (!$output) {
             return;
         }
-        $this->redis->bump(CacheTags::CATEGORIES);
-        $this->redis->bump(CacheTags::PRODUCTS_LIST);
+        $this->redis->bumpOnce(CacheTags::CATEGORIES);
+        $this->redis->bumpOnce(CacheTags::PRODUCTS_LIST);
     }
 
     public function onCategoryAdd($output, $object): void
     {
         if ((int) $output > 0) {
-            $this->redis->bump(CacheTags::CATEGORIES);
-            $this->redis->bump(CacheTags::PRODUCTS_LIST);
+            $this->redis->bumpOnce(CacheTags::CATEGORIES);
+            $this->redis->bumpOnce(CacheTags::PRODUCTS_LIST);
         }
     }
 
@@ -37,7 +37,7 @@ class CategoryCacheInvalidator implements ExtensionInterface
         if (!$output) {
             return;
         }
-        $this->redis->bump(CacheTags::CATEGORIES);
-        $this->redis->bump(CacheTags::PRODUCTS_LIST);
+        $this->redis->bumpOnce(CacheTags::CATEGORIES);
+        $this->redis->bumpOnce(CacheTags::PRODUCTS_LIST);
     }
 }

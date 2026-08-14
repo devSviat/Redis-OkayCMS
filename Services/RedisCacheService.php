@@ -14,9 +14,31 @@ class RedisCacheService
     private ?string $lastError = null;
     private ?array $context = null;
 
+    /**
+     * Підлога TTL. Під maxmemory-policy volatile-lru виселяються лише ключі
+     * з TTL, тож запис без нього зробив би кеш невиселюваним — і тиск пішов
+     * би на лічильники версій, виселення яких «воскрешає» старі дані.
+     */
+    private const MIN_TTL = 60;
+
+    /** Понад стільки тегів вектор версій згортається в хеш. */
+    private const MAX_INLINE_TAGS = 4;
+
+    /** Вікно схлопування повторних bump одного тега, секунди. */
+    private const BUMP_COLLAPSE_WINDOW = 1.0;
+
     private array $helperTtlCache = [];
     private array $versionMemo = [];
     private array $getMemo = [];
+    /** tag => час останнього успішного bump (unix float). */
+    private array $bumpedTags = [];
+    private int $reconnectsLeft = 2;
+
+    private int $statHits = 0;
+    private int $statMisses = 0;
+    private int $statBumps = 0;
+    private int $statRoundTrips = 0;
+    private float $statSeconds = 0.0;
 
     private static ?bool $authSupportsTwoArgs = null;
 
@@ -25,26 +47,49 @@ class RedisCacheService
         $this->settings = $settings;
     }
 
+    /**
+     * Env має пріоритет над налаштуваннями в БД: інакше зміна REDIS_PASSWORD
+     * у .env лишає сайт мовчки без кешу, поки хтось не відкриє адмінку.
+     */
     private function loadConfig(): array
     {
-        $password = trim((string) ($this->settings->get('sviat__redis__password') ?? ''));
-        $username = trim((string) ($this->settings->get('sviat__redis__username') ?? ''));
+        $password = self::env('REDIS_PASSWORD')
+            ?? trim((string) ($this->settings->get('sviat__redis__password') ?? ''));
+        $username = self::env('REDIS_USERNAME')
+            ?? trim((string) ($this->settings->get('sviat__redis__username') ?? ''));
+
+        $enabledEnv = self::env('REDIS_ENABLED');
 
         return [
-            'enabled'  => (bool) $this->settings->get('sviat__redis__enabled'),
-            'host'     => $this->settings->get('sviat__redis__host') ?: '127.0.0.1',
-            'port'     => (int) ($this->settings->get('sviat__redis__port') ?: 6379),
-            'db'       => (int) ($this->settings->get('sviat__redis__db') ?: 0),
+            'enabled'  => $enabledEnv !== null
+                ? filter_var($enabledEnv, FILTER_VALIDATE_BOOLEAN)
+                : (bool) $this->settings->get('sviat__redis__enabled'),
+            'host'     => self::env('REDIS_HOST') ?: ($this->settings->get('sviat__redis__host') ?: '127.0.0.1'),
+            'port'     => (int) (self::env('REDIS_PORT') ?: ($this->settings->get('sviat__redis__port') ?: 6379)),
+            'db'       => (int) (self::env('REDIS_DB') ?? ($this->settings->get('sviat__redis__db') ?: 0)),
             'username' => $username !== '' ? $username : null,
             'auth'     => $password !== '' ? $password : null,
-            'prefix'   => $this->settings->get('sviat__redis__prefix') ?: 'okay:',
+            'prefix'   => self::env('REDIS_PREFIX') ?: ($this->settings->get('sviat__redis__prefix') ?: 'okay:'),
             'ttl'      => (int) ($this->settings->get('sviat__redis__default_ttl') ?: 600),
         ];
     }
 
+    private static function env(string $name): ?string
+    {
+        $value = getenv($name);
+        if ($value === false) {
+            $value = $_ENV[$name] ?? $_SERVER[$name] ?? null;
+        }
+        if ($value === null) {
+            return null;
+        }
+        $value = trim((string) $value);
+        return $value !== '' ? $value : null;
+    }
+
     public function isEnabled(): bool
     {
-        return (bool) $this->settings->get('sviat__redis__enabled') && class_exists('\\Redis');
+        return $this->loadConfig()['enabled'] && class_exists('\\Redis');
     }
 
     public function getLastError(): ?string
@@ -62,7 +107,7 @@ class RedisCacheService
             $this->lastError = 'Redis disabled or extension not installed';
             return null;
         }
-        $this->client = $this->connectBare(true);
+        $this->client = $this->connectBare(true, true);
         return $this->client;
     }
 
@@ -97,7 +142,12 @@ class RedisCacheService
         return $redis->rawCommand('AUTH', $user, $passStr) !== false;
     }
 
-    private function connectBare(bool $applyKeyPrefix = true)
+    /**
+     * @param bool $persistent pconnect тримає з'єднання між запитами воркера.
+     *        Непостійне потрібне тим шляхам, що роблять close() — закривати
+     *        persistent-з'єднання не можна.
+     */
+    private function connectBare(bool $applyKeyPrefix = true, bool $persistent = false)
     {
         $config = $this->loadConfig();
         try {
@@ -107,9 +157,22 @@ class RedisCacheService
             }
             $redisClass = 'Redis';
             $redis = new $redisClass();
-            if (!$redis->connect($config['host'], $config['port'], 1.0)) {
+            // Без method_exists(): pconnect є в phpredis завжди, і PHPStan
+            // справедливо лається на перевірку, що ніколи не хибна.
+            if ($persistent) {
+                $persistentId = 'okay:' . $config['host'] . ':' . $config['port']
+                    . ':' . $config['db'] . ':' . ($config['username'] ?? '');
+                $connected = $redis->pconnect($config['host'], $config['port'], 0.5, $persistentId);
+            } else {
+                $connected = $redis->connect($config['host'], $config['port'], 1.0);
+            }
+            if (!$connected) {
                 $this->lastError = 'Unable to connect to Redis';
                 return null;
+            }
+            $optReadTimeout = defined('Redis::OPT_READ_TIMEOUT') ? constant('Redis::OPT_READ_TIMEOUT') : null;
+            if ($optReadTimeout !== null) {
+                $redis->setOption($optReadTimeout, 0.5);
             }
             if (!$this->authenticateRedis($redis, $config['username'], $config['auth'])) {
                 if ($this->lastError === null) {
@@ -117,7 +180,9 @@ class RedisCacheService
                 }
                 return null;
             }
-            if ($config['db'] > 0 && !$redis->select($config['db'])) {
+            // Безумовно: у persistent-з'єднанні обраний номер БД лишається від
+            // попереднього запиту, тож покладатися на дефолт не можна.
+            if (!$redis->select($config['db'])) {
                 $this->lastError = 'Redis select DB failed';
                 return null;
             }
@@ -260,7 +325,12 @@ class RedisCacheService
             foreach ($tags as $tag) {
                 $parts[] = ':' . self::tagSegmentLabel($tag) . ($versions[$tag] ?? 0);
             }
-            $tagSegment = implode('', $parts);
+            // Ключі картинок теговані пер-товарно, тож на лістингу тегів
+            // десятки. Розгорнутий вектор роздув би ключ на сотні символів —
+            // згортаємо його, лишаючи короткі ключі читабельними.
+            $tagSegment = count($parts) > self::MAX_INLINE_TAGS
+                ? ':v' . md5(implode('|', $parts))
+                : implode('', $parts);
         }
         return 'helpers:' . $name
             . ':l' . ($ctx['lang'] ?? 0)
@@ -359,11 +429,77 @@ class RedisCacheService
             return;
         }
         try {
+            $started = microtime(true);
             $client->incr(self::VERSION_KEY_PREFIX . $tag);
+            $this->statSeconds += microtime(true) - $started;
+            $this->statRoundTrips++;
+            $this->statBumps++;
+            $this->bumpedTags[$tag] = $this->now();
             unset($this->versionMemo[$tag]);
         } catch (\Throwable $e) {
             $this->lastError = $e->getMessage();
+            $this->dropClient();
         }
+    }
+
+    /**
+     * Схлопує повтори того самого тега в межах короткого вікна. Веб-запит
+     * коротший за вікно, тож у ньому bump відбувається рівно раз.
+     *
+     * Вікно, а не «раз на процес»: StockSync іде чанками по 500 хвилинами в
+     * одному процесі, і при схлопуванні на весь процес перший чанк підняв би
+     * версію, фронт закешував би напівоновлені дані, а решта чанків стала б
+     * no-op — вітрина віддавала б середину імпорту до кінця TTL.
+     */
+    public function bumpOnce(string $tag): void
+    {
+        $lastBumpedAt = $this->bumpedTags[$tag] ?? null;
+        if ($lastBumpedAt !== null && ($this->now() - $lastBumpedAt) < self::BUMP_COLLAPSE_WINDOW) {
+            return;
+        }
+        // Прапорець ставить сам bump() — і лише на успішному INCR. Інакше одна
+        // проковтнута помилка назавжди прибрала б усі наступні bump цього тега.
+        $this->bump($tag);
+    }
+
+    protected function now(): float
+    {
+        return microtime(true);
+    }
+
+    /**
+     * Після помилки стан persistent-сокета невідомий: непрочитана відповідь
+     * лишається в буфері, і наступний запит того самого воркера прочитав би
+     * її як відповідь на СВОЮ команду — тобто віддав би чужі дані під своїм
+     * ключем. Тому з'єднання викидаємо, а не переюзуємо.
+     */
+    private function dropClient(): void
+    {
+        if ($this->client !== null) {
+            try { $this->client->close(); } catch (\Throwable $e) {}
+        }
+        $this->client = null;
+
+        // Дозволяємо перепідключитись: інакше один таймаут вимкнув би і кеш,
+        // і — що гірше — інвалідацію до кінця процесу, а CLI-імпорт живе
+        // хвилинами. Спроби обмежені, щоб при лежачій Redis не платити
+        // таймаут за кожне звернення.
+        if ($this->reconnectsLeft > 0) {
+            $this->reconnectsLeft--;
+            $this->initialized = false;
+        }
+    }
+
+    public function getRequestStats(): array
+    {
+        return [
+            'hits'        => $this->statHits,
+            'misses'      => $this->statMisses,
+            'bumps'       => $this->statBumps,
+            'round_trips' => $this->statRoundTrips,
+            'ms'          => round($this->statSeconds * 1000, 2),
+            'error'       => $this->lastError,
+        ];
     }
 
     public function get(string $key)
@@ -375,24 +511,33 @@ class RedisCacheService
         $client = $this->initClient();
         if (!$client) {
             $this->getMemo[$key] = [false, null];
+            $this->statMisses++;
             return null;
         }
         try {
+            $started = microtime(true);
             $data = $client->get($key);
+            $this->statSeconds += microtime(true) - $started;
+            $this->statRoundTrips++;
             if ($data === false || $data === null) {
                 $this->getMemo[$key] = [false, null];
+                $this->statMisses++;
                 return null;
             }
             $value = $this->safeUnserialize((string) $data);
             if ($value === null) {
                 $this->getMemo[$key] = [false, null];
+                $this->statMisses++;
                 return null;
             }
             $this->getMemo[$key] = [true, $value];
+            $this->statHits++;
             return $value;
         } catch (\Throwable $e) {
             $this->lastError = $e->getMessage();
+            $this->dropClient();
             $this->getMemo[$key] = [false, null];
+            $this->statMisses++;
             return null;
         }
     }
@@ -425,7 +570,10 @@ class RedisCacheService
             return $result;
         }
         try {
+            $started = microtime(true);
             $raw = $client->mGet($needFetch);
+            $this->statSeconds += microtime(true) - $started;
+            $this->statRoundTrips++;
             if (!is_array($raw)) {
                 $raw = [];
             }
@@ -434,22 +582,27 @@ class RedisCacheService
                 if ($data === false || $data === null) {
                     $this->getMemo[$k] = [false, null];
                     $result[$k] = null;
+                    $this->statMisses++;
                     continue;
                 }
                 $value = $this->safeUnserialize((string) $data);
                 if ($value === null) {
                     $this->getMemo[$k] = [false, null];
                     $result[$k] = null;
+                    $this->statMisses++;
                     continue;
                 }
                 $this->getMemo[$k] = [true, $value];
                 $result[$k] = $value;
+                $this->statHits++;
             }
         } catch (\Throwable $e) {
             $this->lastError = $e->getMessage();
+            $this->dropClient();
             foreach ($needFetch as $k) {
                 $this->getMemo[$k] = [false, null];
                 $result[$k] = null;
+                $this->statMisses++;
             }
         }
         return $result;
@@ -477,17 +630,22 @@ class RedisCacheService
             return;
         }
         $config = $this->loadConfig();
-        $ttl = $ttl ?? $config['ttl'];
+        $ttl = (int) ($ttl ?? $config['ttl']);
+        // Явно налаштований TTL поважаємо яким є — підлога потрібна лише щоб
+        // не лишитися без TTL узагалі (див. MIN_TTL).
+        if ($ttl <= 0) {
+            $ttl = max(self::MIN_TTL, (int) $config['ttl']);
+        }
         try {
             $data = serialize($value);
-            if ($ttl > 0) {
-                $client->setex($key, $ttl, $data);
-            } else {
-                $client->set($key, $data);
-            }
+            $started = microtime(true);
+            $client->setex($key, $ttl, $data);
+            $this->statSeconds += microtime(true) - $started;
+            $this->statRoundTrips++;
             $this->getMemo[$key] = [true, $value];
         } catch (\Throwable $e) {
             $this->lastError = $e->getMessage();
+            $this->dropClient();
         }
     }
 }

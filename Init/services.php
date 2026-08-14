@@ -24,8 +24,8 @@ use Okay\Helpers\RelatedProductsHelper as CoreRelatedProductsHelper;
 use Okay\Modules\Sviat\Redis\Backend\Controllers\RedisSettingsAdmin;
 use Okay\Modules\Sviat\Redis\Extenders\AuthorCacheInvalidator;
 use Okay\Modules\Sviat\Redis\Extenders\BlogCacheInvalidator;
-use Okay\Modules\Sviat\Redis\Extenders\BlogRelatedCacheExtender;
 use Okay\Modules\Sviat\Redis\Extenders\BrandCacheInvalidator;
+use Okay\Modules\Sviat\Redis\Extenders\CacheStatsReporter;
 use Okay\Modules\Sviat\Redis\Extenders\CategoryCacheInvalidator;
 use Okay\Modules\Sviat\Redis\Extenders\CurrencyCacheInvalidator;
 use Okay\Modules\Sviat\Redis\Extenders\FeaturesCacheInvalidator;
@@ -155,9 +155,14 @@ return [
         'class' => VariantsCacheInvalidator::class,
         'arguments' => [new SR(EntityFactory::class), new SR(RedisCacheService::class)],
     ],
-    BlogRelatedCacheExtender::class => [
-        'class' => BlogRelatedCacheExtender::class,
-        'arguments' => [new SR(RedisCacheService::class)],
+    CacheStatsReporter::class => [
+        'class' => CacheStatsReporter::class,
+        'arguments' => [
+            new SR(RedisCacheService::class),
+            new SR(\Okay\Core\Response::class),
+            new SR(\Okay\Core\Config::class),
+            new SR(\Psr\Log\LoggerInterface::class),
+        ],
     ],
     ProductCacheInvalidator::class => [
         'class' => ProductCacheInvalidator::class,

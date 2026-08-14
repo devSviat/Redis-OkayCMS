@@ -41,7 +41,7 @@ class VariantsCacheInvalidator implements ExtensionInterface
         if (!$output) {
             return;
         }
-        $this->redis->bump(CacheTags::PRODUCTS_ALL);
+        $this->redis->bumpOnce(CacheTags::PRODUCTS_ALL);
     }
 
     private function bumpByVariantIds(array $variantIds): void
@@ -52,7 +52,10 @@ class VariantsCacheInvalidator implements ExtensionInterface
         }
         /** @var VariantsEntity $variantsEntity */
         $variantsEntity = $this->entityFactory->get(VariantsEntity::class);
-        $variants = $variantsEntity->find(['id' => $variantIds]);
+        // noLimit(): дефолтний ліміт Entity — 100 рядків, а StockSync передає
+        // чанки по 500. Без цього pver:<id> піднімався б лише для перших ста
+        // товарів, а решта картки віддавали б стару ціну до кінця TTL.
+        $variants = $variantsEntity->noLimit()->find(['id' => $variantIds]);
         if (empty($variants)) {
             return;
         }
@@ -63,7 +66,13 @@ class VariantsCacheInvalidator implements ExtensionInterface
             }
         }
         foreach ($productIds as $pid) {
-            $this->redis->bump(CacheTags::product($pid));
+            $this->redis->bumpOnce(CacheTags::product($pid));
         }
+
+        // Ціна й наявність варіанта видні в лістингу, а ключ products_get_list
+        // тегований [PRODUCTS_LIST, PRODUCTS_ALL] — pver:<id> у нього не
+        // входить. Без цього рядка після StockSync лістинг до кінця TTL
+        // показував стару ціну й стару наявність.
+        $this->redis->bumpOnce(CacheTags::PRODUCTS_LIST);
     }
 }

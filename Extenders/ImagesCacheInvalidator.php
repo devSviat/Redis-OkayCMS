@@ -31,17 +31,17 @@ class ImagesCacheInvalidator implements ExtensionInterface
     {
         if (!$output) { return; }
         // product_id is gone after delete; invalidate globally.
-        $this->redis->bump(CacheTags::PRODUCTS_ALL);
+        $this->redis->bumpOnce(CacheTags::PRODUCTS_ALL);
     }
 
     private function bumpForObject($object): void
     {
         $productId = $this->extractProductId($object);
         if ($productId > 0) {
-            $this->redis->bump(CacheTags::product($productId));
+            $this->redis->bumpOnce(CacheTags::product($productId));
             return;
         }
-        $this->redis->bump(CacheTags::PRODUCTS_ALL);
+        $this->redis->bumpOnce(CacheTags::PRODUCTS_ALL);
     }
 
     private function extractProductId($object): int

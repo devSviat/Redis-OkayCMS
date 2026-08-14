@@ -20,15 +20,15 @@ class BrandCacheInvalidator implements ExtensionInterface
         if (!$output) {
             return;
         }
-        $this->redis->bump(CacheTags::BRANDS);
-        $this->redis->bump(CacheTags::PRODUCTS_LIST);
+        $this->redis->bumpOnce(CacheTags::BRANDS);
+        $this->redis->bumpOnce(CacheTags::PRODUCTS_LIST);
     }
 
     public function onBrandAdd($output, $object): void
     {
         if ((int) $output > 0) {
-            $this->redis->bump(CacheTags::BRANDS);
-            $this->redis->bump(CacheTags::PRODUCTS_LIST);
+            $this->redis->bumpOnce(CacheTags::BRANDS);
+            $this->redis->bumpOnce(CacheTags::PRODUCTS_LIST);
         }
     }
 
@@ -37,7 +37,7 @@ class BrandCacheInvalidator implements ExtensionInterface
         if (!$output) {
             return;
         }
-        $this->redis->bump(CacheTags::BRANDS);
-        $this->redis->bump(CacheTags::PRODUCTS_LIST);
+        $this->redis->bumpOnce(CacheTags::BRANDS);
+        $this->redis->bumpOnce(CacheTags::PRODUCTS_LIST);
     }
 }

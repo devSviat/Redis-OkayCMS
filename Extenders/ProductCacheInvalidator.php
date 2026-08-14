@@ -23,16 +23,16 @@ class ProductCacheInvalidator implements ExtensionInterface
         foreach ((array) $ids as $id) {
             $id = (int) $id;
             if ($id > 0) {
-                $this->redis->bump(CacheTags::product($id));
+                $this->redis->bumpOnce(CacheTags::product($id));
             }
         }
-        $this->redis->bump(CacheTags::PRODUCTS_LIST);
+        $this->redis->bumpOnce(CacheTags::PRODUCTS_LIST);
     }
 
     public function onProductAdd($output, $object): void
     {
         if ((int) $output > 0) {
-            $this->redis->bump(CacheTags::PRODUCTS_LIST);
+            $this->redis->bumpOnce(CacheTags::PRODUCTS_LIST);
         }
     }
 
@@ -41,7 +41,7 @@ class ProductCacheInvalidator implements ExtensionInterface
         if (!$output) {
             return;
         }
-        $this->redis->bump(CacheTags::PRODUCTS_ALL);
-        $this->redis->bump(CacheTags::PRODUCTS_LIST);
+        $this->redis->bumpOnce(CacheTags::PRODUCTS_ALL);
+        $this->redis->bumpOnce(CacheTags::PRODUCTS_LIST);
     }
 }

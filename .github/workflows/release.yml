@@ -80,7 +80,8 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ matrix.php }}
-          extensions: simplexml, xmlreader, pdo, json, curl, mbstring, zip, gd
+          # redis: без phpredis isEnabled() віддає false і весь набір мовчки скіпається
+          extensions: simplexml, xmlreader, pdo, json, curl, mbstring, zip, gd, redis
           coverage: none
           tools: composer:v2
 
@@ -316,7 +317,8 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ matrix.php }}
-          extensions: simplexml, xmlreader, pdo, json, curl, mbstring, zip, gd
+          # redis: без phpredis isEnabled() віддає false і весь набір мовчки скіпається
+          extensions: simplexml, xmlreader, pdo, json, curl, mbstring, zip, gd, redis
           coverage: none
           tools: composer:v2
 

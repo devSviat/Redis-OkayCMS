@@ -49,9 +49,16 @@ class FakeRedisClient
         return true;
     }
 
+    /** Скільки наступних incr мають кинути виняток (імітація таймауту). */
+    public int $failIncrTimes = 0;
+
     public function incr($key)
     {
         $this->calls[] = ['incr', $key];
+        if ($this->failIncrTimes > 0) {
+            $this->failIncrTimes--;
+            throw new \RuntimeException('read error on connection');
+        }
         $this->store[$key] = (int) ($this->store[$key] ?? 0) + 1;
         return $this->store[$key];
     }
