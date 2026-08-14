@@ -1,5 +1,11 @@
 name: Release
 
+# Джерело версії — Init/module.json, а не теги. Саме його читає ядро:
+# Installer пише версію в БД, і від неї залежить, які update_* спрацюють при
+# оновленні. Тег і реліз — похідні: версію піднімають у PR разом із кодом, а
+# після мерджу CI лише ставить тег на те, що вже у файлі. Тому CI нічого не
+# пише в захищену гілку.
+#
 # Модель тегів:
 #   v<X.Y.Z>        — базовий реліз. Мусить працювати на обох рушіях.
 #   v<X.Y.Z>-fork   — збирається лише тоді, коли в репозиторії є гілка `fork`,
@@ -10,21 +16,13 @@ name: Release
 # своїм репозиторієм, своїм ref і своєю версією PHP.
 
 on:
-  workflow_dispatch:
-    inputs:
-      bump:
-        description: "Version bump"
-        required: true
-        default: patch
-        type: choice
-        options:
-          - major
-          - minor
-          - patch
-  # Ті самі lint і verify — на кожен PR у main. Реліз при цьому не запускається:
-  # він лишається ручним і відсіяний `if` нижче.
+  # PR у main — лише перевірки. Мердж у main — перевірки й реліз, якщо версія
+  # у module.json ще не має тега. workflow_dispatch лишено для ручного повтору.
   pull_request:
     branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
 
 env:
   VENDOR: Sviat
@@ -132,20 +130,21 @@ jobs:
 
   release:
     needs: [lint, verify]
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     outputs:
-      version: ${{ steps.bump.outputs.version }}
-      tag: ${{ steps.bump.outputs.tag }}
+      version: ${{ steps.ver.outputs.version }}
+      tag: ${{ steps.ver.outputs.tag }}
+      needed: ${{ steps.ver.outputs.needed }}
       commit: ${{ steps.tag.outputs.commit }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # workflow_dispatch запускається з будь-якої гілки, а кроки нижче
-      # комітять і тегають ту, з якої запущено. Без цієї перевірки реліз із
-      # випадкової гілки виглядав би як звичайний.
+      # workflow_dispatch запускається з будь-якої гілки, а тег нижче ставиться
+      # на ту, з якої запущено. Без цієї перевірки реліз із випадкової гілки
+      # виглядав би як звичайний.
       - name: Release from the default branch only
         run: |
           set -euo pipefail
@@ -155,74 +154,50 @@ jobs:
             exit 1
           fi
 
-      - name: Compute the next version
-        id: bump
+      - name: Read the version to release
+        id: ver
         run: |
           set -euo pipefail
-          # Нумерацію веде лише базовий тег; варіант -fork за нею йде слідом.
-          last=$(git tag -l 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1 || true)
-          last=${last:-v0.0.0}
-          IFS=. read -r major minor patch <<< "${last#v}"
-          case '${{ inputs.bump }}' in
-            major) major=$((major + 1)); minor=0; patch=0 ;;
-            minor) minor=$((minor + 1)); patch=0 ;;
-            patch) patch=$((patch + 1)) ;;
-          esac
+          v=$(python3 -c 'import json; print(json.load(open("Init/module.json"))["version"])')
+          echo "$v" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'
           {
-            echo "version=$major.$minor.$patch"
-            echo "tag=v$major.$minor.$patch"
-            echo "last=$last"
+            echo "version=$v"
+            echo "tag=v$v"
           } >> "$GITHUB_OUTPUT"
-
-      - name: Check there is something to release
-        run: |
-          set -euo pipefail
-          last='${{ steps.bump.outputs.last }}'
-          if [ "$last" != 'v0.0.0' ] \
-             && [ "$(git rev-parse "$last^{commit}")" = "$(git rev-parse HEAD)" ]; then
-            echo "No new commits since $last — nothing to release."
-            exit 1
+          # Тег на цю версію вже є — виходимо зеленими: PR без підняття версії
+          # не має фарбувати main у червоне.
+          if git rev-parse -q --verify "refs/tags/v$v" >/dev/null; then
+            echo 'needed=false' >> "$GITHUB_OUTPUT"
+            echo "v$v is already tagged — nothing to release."
+          else
+            echo 'needed=true' >> "$GITHUB_OUTPUT"
           fi
-
-      # module.json — джерело версії для ядра: Installer пише її в БД, а від
-      # неї залежить, які update_* методи спрацюють при оновленні. Тег без
-      # цього кроку лишав би її позаду.
-      - name: Bump the version in module.json
-        run: |
-          set -euo pipefail
-          v='${{ steps.bump.outputs.version }}'
-          sed -i -E 's/("version"[[:space:]]*:[[:space:]]*")[^"]*"/\1'"$v"'"/' Init/module.json
-          grep -qE "\"version\"[[:space:]]*:[[:space:]]*\"$v\"" Init/module.json
-          # python3, а не php: у цьому job'і setup-php не виконувався.
-          python3 -c 'import json; json.load(open("Init/module.json"))'
-          git config user.name 'github-actions[bot]'
-          git config user.email 'github-actions[bot]@users.noreply.github.com'
-          # Версію могли підняти вручну в PR — тоді комітити нічого.
-          git diff --quiet || git commit -am "Version $v"
-          git push origin "HEAD:${{ github.ref_name }}"
 
       - name: Create the tag
         id: tag
+        if: steps.ver.outputs.needed == 'true'
         run: |
           set -euo pipefail
-          git tag '${{ steps.bump.outputs.tag }}'
-          git push origin '${{ steps.bump.outputs.tag }}'
+          git tag '${{ steps.ver.outputs.tag }}'
+          git push origin '${{ steps.ver.outputs.tag }}'
           echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Build the archive
+        if: steps.ver.outputs.needed == 'true'
         run: |
           set -euo pipefail
           mkdir -p dist "build/$VENDOR/$MODULE"
           rsync -a --exclude=.git --exclude=.github --exclude=.gitignore \
             --exclude=README.md --exclude=tests --exclude=dist --exclude=build \
             ./ "build/$VENDOR/$MODULE/"
-          (cd build && zip -rq "../dist/$MODULE-${{ steps.bump.outputs.tag }}.zip" "$VENDOR")
+          (cd build && zip -rq "../dist/$MODULE-${{ steps.ver.outputs.tag }}.zip" "$VENDOR")
 
       - name: Publish the release
+        if: steps.ver.outputs.needed == 'true'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.bump.outputs.tag }}
-          name: ${{ steps.bump.outputs.tag }}
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: ${{ steps.ver.outputs.tag }}
           generate_release_notes: true
           files: dist/*.zip
 
@@ -230,6 +205,7 @@ jobs:
   # у job-рівневих `if` наступних двох.
   detect-fork:
     needs: release
+    if: needs.release.outputs.needed == 'true'
     runs-on: ubuntu-latest
     outputs:
       present: ${{ steps.check.outputs.present }}
