@@ -17,16 +17,16 @@ class SpecialImagesCacheInvalidator implements ExtensionInterface
 
     public function onSpecialImageAdd($output, $object): void
     {
-        if ((int) $output > 0) { $this->redis->bump(CacheTags::PRODUCTS_ALL); }
+        if ((int) $output > 0) { $this->redis->bumpOnce(CacheTags::PRODUCTS_ALL); }
     }
 
     public function onSpecialImageUpdate($output, $ids, $object): void
     {
-        if ($output) { $this->redis->bump(CacheTags::PRODUCTS_ALL); }
+        if ($output) { $this->redis->bumpOnce(CacheTags::PRODUCTS_ALL); }
     }
 
     public function onSpecialImageDelete($output, $ids): void
     {
-        if ($output) { $this->redis->bump(CacheTags::PRODUCTS_ALL); }
+        if ($output) { $this->redis->bumpOnce(CacheTags::PRODUCTS_ALL); }
     }
 }

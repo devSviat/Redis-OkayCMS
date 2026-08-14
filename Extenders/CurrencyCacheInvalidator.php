@@ -18,21 +18,21 @@ class CurrencyCacheInvalidator implements ExtensionInterface
     public function onCurrencyUpdate($output, $ids, $object): void
     {
         if (!$output) { return; }
-        $this->redis->bump(CacheTags::MONEY);
-        $this->redis->bump(CacheTags::PRODUCTS_ALL);
+        $this->redis->bumpOnce(CacheTags::MONEY);
+        $this->redis->bumpOnce(CacheTags::PRODUCTS_ALL);
     }
 
     public function onCurrencyAdd($output, $object): void
     {
         if ((int) $output <= 0) { return; }
-        $this->redis->bump(CacheTags::MONEY);
-        $this->redis->bump(CacheTags::PRODUCTS_ALL);
+        $this->redis->bumpOnce(CacheTags::MONEY);
+        $this->redis->bumpOnce(CacheTags::PRODUCTS_ALL);
     }
 
     public function onCurrencyDelete($output, $ids): void
     {
         if (!$output) { return; }
-        $this->redis->bump(CacheTags::MONEY);
-        $this->redis->bump(CacheTags::PRODUCTS_ALL);
+        $this->redis->bumpOnce(CacheTags::MONEY);
+        $this->redis->bumpOnce(CacheTags::PRODUCTS_ALL);
     }
 }

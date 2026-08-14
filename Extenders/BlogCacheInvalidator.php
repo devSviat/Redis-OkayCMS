@@ -17,16 +17,16 @@ class BlogCacheInvalidator implements ExtensionInterface
 
     public function onBlogUpdate($output, $ids, $object): void
     {
-        if ($output) { $this->redis->bump(CacheTags::AUTHORS_BLOG); }
+        if ($output) { $this->redis->bumpOnce(CacheTags::AUTHORS_BLOG); }
     }
 
     public function onBlogAdd($output, $object): void
     {
-        if ((int) $output > 0) { $this->redis->bump(CacheTags::AUTHORS_BLOG); }
+        if ((int) $output > 0) { $this->redis->bumpOnce(CacheTags::AUTHORS_BLOG); }
     }
 
     public function onBlogDelete($output, $ids): void
     {
-        if ($output) { $this->redis->bump(CacheTags::AUTHORS_BLOG); }
+        if ($output) { $this->redis->bumpOnce(CacheTags::AUTHORS_BLOG); }
     }
 }

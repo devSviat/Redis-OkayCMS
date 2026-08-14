@@ -4,6 +4,7 @@ namespace Okay\Modules\Sviat\Redis\Helpers;
 
 use Okay\Core\EntityFactory;
 use Okay\Core\Modules\Extender\ExtenderFacade;
+use Okay\Core\Routes\ProductRoute;
 use Okay\Core\Settings;
 use Okay\Helpers\CatalogHelper;
 use Okay\Helpers\FilterHelper;
@@ -110,7 +111,7 @@ class ProductsHelper extends \Okay\Helpers\ProductsHelper
         if (count($productIds) > 20) {
             return parent::attachImages($products);
         }
-        $tags = [CacheTags::PRODUCTS_ALL];
+        $tags = $this->imageCacheTags($productIds);
         $key = $this->redisCache->makeVersionedKey('products_attach_images', $tags, [$productIds]);
         $cached = $this->redisCache->get($key);
 
@@ -152,10 +153,14 @@ class ProductsHelper extends \Okay\Helpers\ProductsHelper
         }
         $imageIds = array_values(array_unique($imageIds));
         sort($imageIds);
-        if (count($imageIds) > 50) {
+        // Вартість ключа тягне не лише кількість картинок: тегів рівно стільки,
+        // скільки товарів, і кожен — це версія в mGET. Лістинг на 200 товарів
+        // із 40 картинками інакше пройшов би повз обмеження і зібрав ключ на
+        // 201 тег.
+        if (count($imageIds) > 50 || count($products) > 50) {
             return parent::attachMainImages($products);
         }
-        $tags = [CacheTags::PRODUCTS_ALL];
+        $tags = $this->imageCacheTags(array_map('intval', array_keys($products)));
         $key = $this->redisCache->makeVersionedKey('products_attach_main_images', $tags, [$imageIds]);
         $cached = $this->redisCache->get($key);
 
@@ -194,6 +199,7 @@ class ProductsHelper extends \Okay\Helpers\ProductsHelper
         $key  = $this->redisCache->makeVersionedKey('products_get_list', $tags, [$filter, $sortName, $excludedFields]);
         $cached = $this->redisCache->get($key);
         if ($cached !== null) {
+            $this->warmRouteAliases($cached);
             return ExtenderFacade::execute(
                 \Okay\Helpers\ProductsHelper::class . '::getList',
                 $cached,
@@ -206,5 +212,44 @@ class ProductsHelper extends \Okay\Helpers\ProductsHelper
             $this->redisCache->set($key, $result, $ttl);
         }
         return $result;
+    }
+
+    /**
+     * Ядро робить це в кінці Okay\Helpers\ProductsHelper::getList(). На HIT ми
+     * туди не заходимо, і перший {$product|url} у шаблоні змушує
+     * NoPrefixAndCategoryStrategy вичитати всю ok_router_cache — заміряно
+     * 18448 прочитаних рядків проти 2901 на MISS, тобто HIT виходив
+     * повільнішим за MISS.
+     */
+    private function warmRouteAliases($products): void
+    {
+        if (!is_array($products)) {
+            return;
+        }
+        foreach ($products as $product) {
+            if (!empty($product->url) && !empty($product->slug_url)) {
+                ProductRoute::setUrlSlugAlias($product->url, $product->slug_url);
+            }
+        }
+    }
+
+    /**
+     * Ключі картинок теговані PRODUCTS_ALL, а ImagesCacheInvalidator бампає
+     * pver:<id> — теги не збігалися, тож інвалідація списків була no-op і
+     * стара картинка жила до кінця TTL.
+     */
+    private function imageCacheTags(array $productIds): array
+    {
+        // Сортуємо: понад чотири теги вектор версій згортається в md5, тож
+        // порядок став би значущим і той самий набір товарів під різним
+        // сортуванням лістингу давав би різні ключі.
+        $productIds = array_values(array_unique(array_map('intval', $productIds)));
+        sort($productIds);
+
+        $tags = [CacheTags::PRODUCTS_ALL];
+        foreach ($productIds as $id) {
+            $tags[] = CacheTags::product($id);
+        }
+        return $tags;
     }
 }

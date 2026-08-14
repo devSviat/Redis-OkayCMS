@@ -3,6 +3,7 @@
 namespace Okay\Modules\Sviat\Redis\Init;
 
 use Okay\Core\Modules\AbstractInit;
+use Okay\Helpers\MainHelper;
 use Okay\Entities\AuthorsEntity;
 use Okay\Entities\BlogEntity;
 use Okay\Entities\BrandsEntity;
@@ -16,8 +17,8 @@ use Okay\Entities\SpecialImagesEntity;
 use Okay\Entities\VariantsEntity;
 use Okay\Modules\Sviat\Redis\Extenders\AuthorCacheInvalidator;
 use Okay\Modules\Sviat\Redis\Extenders\BlogCacheInvalidator;
-use Okay\Modules\Sviat\Redis\Extenders\BlogRelatedCacheExtender;
 use Okay\Modules\Sviat\Redis\Extenders\BrandCacheInvalidator;
+use Okay\Modules\Sviat\Redis\Extenders\CacheStatsReporter;
 use Okay\Modules\Sviat\Redis\Extenders\CategoryCacheInvalidator;
 use Okay\Modules\Sviat\Redis\Extenders\CurrencyCacheInvalidator;
 use Okay\Modules\Sviat\Redis\Extenders\FeaturesCacheInvalidator;
@@ -39,10 +40,10 @@ class Init extends AbstractInit
         $this->registerBackendController('RedisSettingsAdmin');
         $this->addBackendControllerPermission('RedisSettingsAdmin', 'settings');
 
-        // Blog related products — ChainExtender (returns the cached value).
-        $this->registerChainExtension(
-            ['class' => BlogEntity::class, 'method' => 'getRelatedProducts'],
-            ['class' => BlogRelatedCacheExtender::class, 'method' => 'getRelatedProducts']
+        // Діагностика hit/miss у заголовку X-Redis при debug_mode.
+        $this->registerQueueExtension(
+            [MainHelper::class, 'commonAfterControllerProcedure'],
+            [CacheStatsReporter::class, 'reportStats']
         );
 
         // Products
