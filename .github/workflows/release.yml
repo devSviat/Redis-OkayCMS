@@ -21,6 +21,10 @@ on:
           - major
           - minor
           - patch
+  # Ті самі lint і verify — на кожен PR у main. Реліз при цьому не запускається:
+  # він лишається ручним і відсіяний `if` нижче.
+  pull_request:
+    branches: [main]
 
 env:
   VENDOR: Sviat
@@ -128,6 +132,7 @@ jobs:
 
   release:
     needs: [lint, verify]
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.bump.outputs.version }}
