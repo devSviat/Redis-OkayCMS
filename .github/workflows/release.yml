@@ -82,7 +82,7 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ matrix.php }}
-          # redis: без phpredis isEnabled() віддає false і весь набір мовчки скіпається
+          # redis: без нього тести кеш-модуля мовчки скіпаються, решті не заважає
           extensions: simplexml, xmlreader, pdo, json, curl, mbstring, zip, gd, redis
           coverage: none
           tools: composer:v2
@@ -299,7 +299,7 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ matrix.php }}
-          # redis: без phpredis isEnabled() віддає false і весь набір мовчки скіпається
+          # redis: без нього тести кеш-модуля мовчки скіпаються, решті не заважає
           extensions: simplexml, xmlreader, pdo, json, curl, mbstring, zip, gd, redis
           coverage: none
           tools: composer:v2
