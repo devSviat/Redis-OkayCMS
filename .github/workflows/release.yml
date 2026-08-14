@@ -1,4 +1,4 @@
-name: Реліз
+name: Release
 
 # Модель тегів:
 #   v<X.Y.Z>        — базовий реліз. Мусить працювати на обох рушіях.
@@ -13,7 +13,7 @@ on:
   workflow_dispatch:
     inputs:
       bump:
-        description: "Яку частину версії підняти?"
+        description: "Version bump"
         required: true
         default: patch
         type: choice
@@ -31,7 +31,7 @@ permissions:
 
 jobs:
   lint:
-    name: Синтаксис PHP ${{ matrix.php }}
+    name: PHP ${{ matrix.php }} syntax
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -71,12 +71,12 @@ jobs:
             ref: main
             php: '8.5'
     steps:
-      - name: Забрати модуль
+      - name: Check out the module
         uses: actions/checkout@v4
         with:
           path: module
 
-      - name: Поставити PHP
+      - name: Set up PHP
         uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ matrix.php }}
@@ -85,7 +85,7 @@ jobs:
           coverage: none
           tools: composer:v2
 
-      - name: Чи має модуль тести
+      - name: Detect tests
         id: tests
         working-directory: module
         run: |
@@ -94,12 +94,12 @@ jobs:
             echo 'present=true' >> "$GITHUB_OUTPUT"
           else
             echo 'present=false' >> "$GITHUB_OUTPUT"
-            echo 'Тестів у модулі немає — прогін пропускається.'
+            echo 'The module has no tests — skipping the run.'
           fi
 
       # Тести модуля посилаються на класи ядра, тож виконуються всередині
       # справжнього рушія. Розкладка — та сама, що у верстаку okay-lab.
-      - name: Забрати рушій ${{ matrix.target }}
+      - name: Check out the ${{ matrix.target }} engine
         if: steps.tests.outputs.present == 'true'
         uses: actions/checkout@v4
         with:
@@ -107,12 +107,12 @@ jobs:
           ref: ${{ matrix.ref }}
           path: engine
 
-      - name: Залежності рушія
+      - name: Install engine dependencies
         if: steps.tests.outputs.present == 'true'
         working-directory: engine
         run: composer install --no-interaction --prefer-dist --no-progress
 
-      - name: Вкласти модуль у рушій
+      - name: Place the module into the engine
         if: steps.tests.outputs.present == 'true'
         run: |
           set -euo pipefail
@@ -121,7 +121,7 @@ jobs:
             module/ "engine/Okay/Modules/$VENDOR/$MODULE/"
           rsync -a module/tests/ "engine/tests/Modules/$VENDOR/$MODULE/"
 
-      - name: PHPUnit на ${{ matrix.target }}
+      - name: PHPUnit on ${{ matrix.target }}
         if: steps.tests.outputs.present == 'true'
         working-directory: engine
         run: vendor/bin/phpunit "tests/Modules/$VENDOR/$MODULE"
@@ -141,16 +141,16 @@ jobs:
       # workflow_dispatch запускається з будь-якої гілки, а кроки нижче
       # комітять і тегають ту, з якої запущено. Без цієї перевірки реліз із
       # випадкової гілки виглядав би як звичайний.
-      - name: Реліз лише з основної гілки
+      - name: Release from the default branch only
         run: |
           set -euo pipefail
           default='${{ github.event.repository.default_branch }}'
           if [ '${{ github.ref_name }}' != "$default" ]; then
-            echo "Реліз запускається лише з $default, а не з ${{ github.ref_name }}."
+            echo "Releases run from $default only, not from ${{ github.ref_name }}."
             exit 1
           fi
 
-      - name: Порахувати нову версію
+      - name: Compute the next version
         id: bump
         run: |
           set -euo pipefail
@@ -169,20 +169,20 @@ jobs:
             echo "last=$last"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Чи є що релізити
+      - name: Check there is something to release
         run: |
           set -euo pipefail
           last='${{ steps.bump.outputs.last }}'
           if [ "$last" != 'v0.0.0' ] \
              && [ "$(git rev-parse "$last^{commit}")" = "$(git rev-parse HEAD)" ]; then
-            echo "Від $last немає нових комітів — реліз не потрібен."
+            echo "No new commits since $last — nothing to release."
             exit 1
           fi
 
       # module.json — джерело версії для ядра: Installer пише її в БД, а від
       # неї залежить, які update_* методи спрацюють при оновленні. Тег без
       # цього кроку лишав би її позаду.
-      - name: Підняти версію в module.json
+      - name: Bump the version in module.json
         run: |
           set -euo pipefail
           v='${{ steps.bump.outputs.version }}'
@@ -193,10 +193,10 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email 'github-actions[bot]@users.noreply.github.com'
           # Версію могли підняти вручну в PR — тоді комітити нічого.
-          git diff --quiet || git commit -am "Версія $v"
+          git diff --quiet || git commit -am "Version $v"
           git push origin "HEAD:${{ github.ref_name }}"
 
-      - name: Поставити тег
+      - name: Create the tag
         id: tag
         run: |
           set -euo pipefail
@@ -204,7 +204,7 @@ jobs:
           git push origin '${{ steps.bump.outputs.tag }}'
           echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
-      - name: Зібрати архів
+      - name: Build the archive
         run: |
           set -euo pipefail
           mkdir -p dist "build/$VENDOR/$MODULE"
@@ -213,7 +213,7 @@ jobs:
             ./ "build/$VENDOR/$MODULE/"
           (cd build && zip -rq "../dist/$MODULE-${{ steps.bump.outputs.tag }}.zip" "$VENDOR")
 
-      - name: Реліз
+      - name: Publish the release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.bump.outputs.tag }}
@@ -233,7 +233,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Чи є гілка fork
+      - name: Detect the fork branch
         id: check
         run: |
           set -euo pipefail
@@ -241,21 +241,21 @@ jobs:
             echo 'present=true' >> "$GITHUB_OUTPUT"
           else
             echo 'present=false' >> "$GITHUB_OUTPUT"
-            echo 'Гілки fork немає — форк-специфічних змін теж, варіант не збирається.'
+            echo 'No fork branch, so no fork-specific changes — the variant is not built.'
           fi
 
       # Явна відмова замість тихого злиття: якщо fork не містить щойно
       # випущеного коміту, його архів був би старішим за базовий і мовчки
       # роз'їхався б з ним.
-      - name: Переконатися, що fork містить базовий реліз
+      - name: Ensure the fork branch contains the base release
         if: steps.check.outputs.present == 'true'
         run: |
           set -euo pipefail
           base='${{ needs.release.outputs.commit }}'
           git fetch origin fork
           if ! git merge-base --is-ancestor "$base" origin/fork; then
-            echo "Гілка fork не містить коміт релізу $base."
-            echo 'Влий у неї основну гілку і запусти реліз ще раз.'
+            echo "The fork branch does not contain release commit $base."
+            echo 'Merge the default branch into it and run the release again.'
             exit 1
           fi
 
@@ -263,7 +263,7 @@ jobs:
   lint-fork:
     needs: detect-fork
     if: needs.detect-fork.outputs.present == 'true'
-    name: fork-гілка / синтаксис PHP ${{ matrix.php }}
+    name: fork branch / PHP ${{ matrix.php }} syntax
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -291,7 +291,7 @@ jobs:
   verify-fork:
     needs: detect-fork
     if: needs.detect-fork.outputs.present == 'true'
-    name: fork-гілка / ${{ matrix.target }} (PHP ${{ matrix.php }})
+    name: fork branch / ${{ matrix.target }} (PHP ${{ matrix.php }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -308,13 +308,13 @@ jobs:
             ref: main
             php: '8.5'
     steps:
-      - name: Забрати гілку fork
+      - name: Check out the fork branch
         uses: actions/checkout@v4
         with:
           ref: fork
           path: module
 
-      - name: Поставити PHP
+      - name: Set up PHP
         uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ matrix.php }}
@@ -323,7 +323,7 @@ jobs:
           coverage: none
           tools: composer:v2
 
-      - name: Чи має модуль тести
+      - name: Detect tests
         id: tests
         working-directory: module
         run: |
@@ -332,10 +332,10 @@ jobs:
             echo 'present=true' >> "$GITHUB_OUTPUT"
           else
             echo 'present=false' >> "$GITHUB_OUTPUT"
-            echo 'Тестів у модулі немає — прогін пропускається.'
+            echo 'The module has no tests — skipping the run.'
           fi
 
-      - name: Забрати рушій ${{ matrix.target }}
+      - name: Check out the ${{ matrix.target }} engine
         if: steps.tests.outputs.present == 'true'
         uses: actions/checkout@v4
         with:
@@ -343,12 +343,12 @@ jobs:
           ref: ${{ matrix.ref }}
           path: engine
 
-      - name: Залежності рушія
+      - name: Install engine dependencies
         if: steps.tests.outputs.present == 'true'
         working-directory: engine
         run: composer install --no-interaction --prefer-dist --no-progress
 
-      - name: Вкласти модуль у рушій
+      - name: Place the module into the engine
         if: steps.tests.outputs.present == 'true'
         run: |
           set -euo pipefail
@@ -357,7 +357,7 @@ jobs:
             module/ "engine/Okay/Modules/$VENDOR/$MODULE/"
           rsync -a module/tests/ "engine/tests/Modules/$VENDOR/$MODULE/"
 
-      - name: PHPUnit на ${{ matrix.target }}
+      - name: PHPUnit on ${{ matrix.target }}
         if: steps.tests.outputs.present == 'true'
         working-directory: engine
         run: vendor/bin/phpunit "tests/Modules/$VENDOR/$MODULE"
@@ -372,7 +372,7 @@ jobs:
           ref: fork
           fetch-depth: 0
 
-      - name: Вирівняти версію й поставити тег
+      - name: Align the version and create the tag
         run: |
           set -euo pipefail
           v='${{ needs.release.outputs.version }}'
@@ -380,12 +380,12 @@ jobs:
           python3 -c 'import json; json.load(open("Init/module.json"))'
           git config user.name 'github-actions[bot]'
           git config user.email 'github-actions[bot]@users.noreply.github.com'
-          git diff --quiet || git commit -am "Версія $v"
+          git diff --quiet || git commit -am "Version $v"
           git push origin HEAD:fork
           git tag '${{ needs.release.outputs.tag }}-fork'
           git push origin '${{ needs.release.outputs.tag }}-fork'
 
-      - name: Зібрати архів
+      - name: Build the archive
         run: |
           set -euo pipefail
           mkdir -p dist "build/$VENDOR/$MODULE"
@@ -394,10 +394,10 @@ jobs:
             ./ "build/$VENDOR/$MODULE/"
           (cd build && zip -rq "../dist/$MODULE-${{ needs.release.outputs.tag }}-fork.zip" "$VENDOR")
 
-      - name: Реліз
+      - name: Publish the release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.release.outputs.tag }}-fork
           name: ${{ needs.release.outputs.tag }}-fork
-          body: "Варіант для форку OkayCMS (PHP 8.5, Smarty 5). Базовий реліз — ${{ needs.release.outputs.tag }}."
+          body: "Variant for the OkayCMS fork (PHP 8.5, Smarty 5). Base release — ${{ needs.release.outputs.tag }}."
           files: dist/*.zip
