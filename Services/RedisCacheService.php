@@ -32,6 +32,9 @@ class RedisCacheService
     private array $getMemo = [];
     /** tag => час останнього успішного bump (unix float). */
     private array $bumpedTags = [];
+    /** tag => true для bump, які схлопнуло вікно і які ще треба зробити. */
+    private array $pendingBumps = [];
+    private bool $pendingFlushRegistered = false;
     private int $reconnectsLeft = 2;
 
     private int $statHits = 0;
@@ -435,7 +438,7 @@ class RedisCacheService
             $this->statRoundTrips++;
             $this->statBumps++;
             $this->bumpedTags[$tag] = $this->now();
-            unset($this->versionMemo[$tag]);
+            unset($this->versionMemo[$tag], $this->pendingBumps[$tag]);
         } catch (\Throwable $e) {
             $this->lastError = $e->getMessage();
             $this->dropClient();
@@ -455,11 +458,35 @@ class RedisCacheService
     {
         $lastBumpedAt = $this->bumpedTags[$tag] ?? null;
         if ($lastBumpedAt !== null && ($this->now() - $lastBumpedAt) < self::BUMP_COLLAPSE_WINDOW) {
+            // Відкладаємо, а не викидаємо: якщо серія на цьому bump і скінчилась,
+            // версію більше нікому підняти, і вітрина віддавала б стан початку
+            // серії до кінця TTL.
+            $this->pendingBumps[$tag] = true;
+            if (!$this->pendingFlushRegistered) {
+                $this->pendingFlushRegistered = true;
+                $this->registerPendingFlush();
+            }
             return;
         }
         // Прапорець ставить сам bump() — і лише на успішному INCR. Інакше одна
         // проковтнута помилка назавжди прибрала б усі наступні bump цього тега.
         $this->bump($tag);
+    }
+
+    /** Хвіст серії: піднімає версії, борг за якими лишився після схлопування. */
+    public function flushPendingBumps(): void
+    {
+        $tags = array_keys($this->pendingBumps);
+        $this->pendingBumps = [];
+        foreach ($tags as $tag) {
+            $this->bump($tag);
+        }
+    }
+
+    /** Окремим методом, щоб тест не реєстрував справжній shutdown-хук. */
+    protected function registerPendingFlush(): void
+    {
+        register_shutdown_function([$this, 'flushPendingBumps']);
     }
 
     protected function now(): float

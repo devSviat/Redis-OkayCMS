@@ -193,6 +193,68 @@ class RedisCacheServiceTest extends TestCase
     }
 
     /**
+     * Хвіст серії. Вікно схлопує повтори, і останній із них губився: якщо після
+     * нього bump більше не приходить, версія лишається на значенні початку
+     * серії. Останній чанк імпорту вітрина не бачила до кінця TTL.
+     */
+    public function testSwallowedBumpIsFlushedWhenTheSeriesEnds(): void
+    {
+        if (!class_exists('\\Redis')) { $this->markTestSkipped('phpredis not installed'); }
+        $client = new FakeRedisClient();
+        $service = $this->makeCollapsingService($client);
+
+        $service->bumpOnce('plist:global');   // t=0, піднімає
+        $service->clock += 0.3;
+        $service->bumpOnce('plist:global');   // у вікні — відкладається
+        $service->clock += 0.3;
+        $service->bumpOnce('plist:global');   // теж у вікні
+
+        $this->assertCount(1, array_filter($client->calls, fn($c) => $c[0] === 'incr'), 'у вікні bump один');
+        $this->assertSame(1, $service->flushRegistrations, 'хук реєструється один раз на серію');
+
+        $service->flushPendingBumps();        // процес завершується
+
+        $this->assertCount(2, array_filter($client->calls, fn($c) => $c[0] === 'incr'), 'хвіст серії піднімає версію');
+        $this->assertSame(2, $client->store['helpers:ver:plist:global']);
+    }
+
+    /** Успішний bump знімає борг — на завершенні процесу зайвого INCR не буде. */
+    public function testFlushDoesNothingWhenTheWindowAlreadyExpired(): void
+    {
+        if (!class_exists('\\Redis')) { $this->markTestSkipped('phpredis not installed'); }
+        $client = new FakeRedisClient();
+        $service = $this->makeCollapsingService($client);
+
+        $service->bumpOnce('plist:global');
+        $service->clock += 0.3;
+        $service->bumpOnce('plist:global');   // відкладено
+        $service->clock += 5.0;
+        $service->bumpOnce('plist:global');   // вікно минуло — борг погашено
+
+        $service->flushPendingBumps();
+
+        $this->assertCount(2, array_filter($client->calls, fn($c) => $c[0] === 'incr'));
+        $this->assertSame(2, $client->store['helpers:ver:plist:global']);
+    }
+
+    /** Сервіс із керованим годинником і без справжнього shutdown-хука. */
+    private function makeCollapsingService(FakeRedisClient $client): RedisCacheService
+    {
+        $service = new class ($this->createStub(Settings::class)) extends RedisCacheService {
+            public float $clock = 1000.0;
+            public int $flushRegistrations = 0;
+            public function isEnabled(): bool { return true; }
+            protected function now(): float { return $this->clock; }
+            protected function registerPendingFlush(): void { $this->flushRegistrations++; }
+        };
+        $r = new \ReflectionClass(RedisCacheService::class);
+        self::accessible($r->getProperty('client'))->setValue($service, $client);
+        self::accessible($r->getProperty('initialized'))->setValue($service, true);
+
+        return $service;
+    }
+
+    /**
      * Проковтнута помилка INCR не має назавжди прибрати наступні bump цього
      * тега — інакше версія не зростає й лістинг віддає доредакційні дані.
      */
