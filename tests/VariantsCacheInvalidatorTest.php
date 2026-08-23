@@ -19,11 +19,11 @@ class VariantsCacheInvalidatorTest extends TestCase
 {
     private function makeInvalidator(StubRedisCacheService $stub, array $variants): VariantsCacheInvalidator
     {
-        $variantsEntity = $this->createMock(VariantsEntity::class);
+        $variantsEntity = $this->createStub(VariantsEntity::class);
         $variantsEntity->method('noLimit')->willReturnSelf();
         $variantsEntity->method('find')->willReturn($variants);
 
-        $entityFactory = $this->createMock(EntityFactory::class);
+        $entityFactory = $this->createStub(EntityFactory::class);
         $entityFactory->method('get')->willReturn($variantsEntity);
 
         return new VariantsCacheInvalidator($entityFactory, $stub);

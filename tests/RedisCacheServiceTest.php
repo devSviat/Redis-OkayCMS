@@ -15,7 +15,7 @@ class RedisCacheServiceTest extends TestCase
 
     private function makeService(FakeRedisClient $client, bool $enabled = true): RedisCacheService
     {
-        $settings = $this->createMock(Settings::class);
+        $settings = $this->createStub(Settings::class);
         $settings->method('get')->willReturnCallback(function (string $key) use ($enabled) {
             return [
                 'sviat__redis__enabled' => $enabled,
