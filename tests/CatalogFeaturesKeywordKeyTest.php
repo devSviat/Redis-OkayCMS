@@ -27,12 +27,8 @@ class CatalogFeaturesKeywordKeyTest extends TestCase
     private function filterHelper(?string $keyword): FilterHelper
     {
         return new class ($keyword) extends FilterHelper {
-            /** @var string|null */
-            private $keyword;
-
-            public function __construct(?string $keyword)
+            public function __construct(private ?string $keyword)
             {
-                $this->keyword = $keyword;
             }
 
             public function getKeyword(): ?string
