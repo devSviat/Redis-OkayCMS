@@ -33,13 +33,9 @@ class RememberSwrTest extends TestCase
         $service = new class ($settings, $now) extends RedisCacheService {
             public array $deferred = [];
 
-            /** @var float */
-            private $fakeNow;
-
-            public function __construct(Settings $settings, float $fakeNow)
+            public function __construct(Settings $settings, private float $fakeNow)
             {
                 parent::__construct($settings);
-                $this->fakeNow = $fakeNow;
             }
 
             protected function now(): float

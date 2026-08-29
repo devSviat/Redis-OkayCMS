@@ -287,8 +287,13 @@ class BreakerAndPendingBumpsTest extends TestCase
             $service->bump('pver:' . $i);
         }
 
-        $this->assertLessThan(20000, filesize($this->bumpsFile()));
-        $this->assertStringContainsString('*', (string) file_get_contents($this->bumpsFile()));
+        $written = (string) file_get_contents($this->bumpsFile());
+
+        // Розмір беремо з вмісту: filesize() читав би той самий кеш stat, який
+        // тут і перевіряється. Стеля — 16 КіБ, і перерости її список може
+        // щонайбільше на останній рядок.
+        $this->assertLessThan(16384 + 64, strlen($written));
+        $this->assertStringContainsString('*', $written);
     }
 }
 
