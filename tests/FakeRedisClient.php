@@ -34,9 +34,13 @@ class FakeRedisClient
         return $out;
     }
 
-    public function set($key, $value): bool
+    /** Третій аргумент — опції phpredis: ['nx', 'ex' => N]. NX тут справжній. */
+    public function set($key, $value, $options = null): bool
     {
         $this->calls[] = ['set', $key, $value];
+        if (is_array($options) && in_array('nx', $options, true) && array_key_exists($key, $this->store)) {
+            return false;
+        }
         $this->store[$key] = $value;
         return true;
     }
@@ -63,5 +67,20 @@ class FakeRedisClient
         return $this->store[$key];
     }
 
-    public function flushDB(): bool { $this->store = []; $this->ttls = []; return true; }
+    public function del($key): int
+    {
+        $this->calls[] = ['del', $key];
+        if (!array_key_exists($key, $this->store)) {
+            return 0;
+        }
+        unset($this->store[$key], $this->ttls[$key]);
+        return 1;
+    }
+
+    public bool $failFlush = false;
+    public function flushDB(): bool
+    {
+        if ($this->failFlush) { throw new \RuntimeException('flush failed'); }
+        $this->store = []; $this->ttls = []; return true;
+    }
 }

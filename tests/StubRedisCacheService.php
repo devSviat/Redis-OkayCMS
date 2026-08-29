@@ -56,4 +56,29 @@ class StubRedisCacheService extends RedisCacheService
     {
         return null;
     }
+
+    /**
+     * Конструктор батька пропущено, тож справжній remember() впав би на
+     * loadConfig(). Тут той самий контракт, але без Redis: cachedValue — влучання.
+     */
+    public function remember(
+        string $name,
+        array $tags,
+        array $args,
+        callable $producer,
+        ?int $ttl = null,
+        ?callable $onHit = null,
+        ?callable $worthStoring = null
+    ) {
+        if ($this->cachedValue !== null) {
+            return $onHit === null ? $this->cachedValue : $onHit($this->cachedValue);
+        }
+
+        $value = $producer();
+        if ($worthStoring === null || $worthStoring($value)) {
+            $this->stored[$this->makeVersionedKey($name, $tags, $args)] = [$value, $ttl];
+        }
+
+        return $value;
+    }
 }

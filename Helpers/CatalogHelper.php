@@ -16,6 +16,7 @@ use Okay\Modules\Sviat\Redis\Services\RedisCacheService;
 class CatalogHelper extends \Okay\Helpers\CatalogHelper
 {
     private RedisCacheService $redisCache;
+    private FilterHelper $filterHelper;
 
     public function __construct(
         EntityFactory     $entityFactory,
@@ -29,43 +30,59 @@ class CatalogHelper extends \Okay\Helpers\CatalogHelper
     ) {
         parent::__construct($entityFactory, $money, $settings, $request, $filterHelper, $metaRobotsHelper, $design);
         $this->redisCache = $redisCache;
+        $this->filterHelper = $filterHelper;
     }
 
     public function getCatalogFeaturesFilter(): array
     {
-        if (!$this->redisCache->isEnabled()) {
+        if (!$this->redisCache->isEnabled() || $this->isSearchRequest()) {
             return parent::getCatalogFeaturesFilter();
         }
-        $key = $this->redisCache->makeVersionedKey('catalog_features_filter', [CacheTags::PRODUCTS_ALL], []);
-        $cached = $this->redisCache->get($key);
-        if ($cached !== null) {
-            return ExtenderFacade::execute(
+        $args = func_get_args();
+
+        return $this->redisCache->remember(
+            'catalog_features_filter',
+            [CacheTags::PRODUCTS_ALL],
+            [],
+            fn () => parent::getCatalogFeaturesFilter(),
+            $this->redisCache->getHelperTtl('catalog_features_filter'),
+            fn ($cached) => ExtenderFacade::execute(
                 \Okay\Helpers\CatalogHelper::class . '::getCatalogFeaturesFilter',
                 $cached,
-                func_get_args()
-            );
-        }
-        $result = parent::getCatalogFeaturesFilter();
-        $this->redisCache->set($key, $result, $this->redisCache->getHelperTtl('catalog_features_filter'));
-        return $result;
+                $args
+            )
+        );
     }
 
     public function getCatalogFeatures(?array $filter = null): array
     {
-        if (!$this->redisCache->isEnabled()) {
+        // При $filter === null фільтр збирається всередині parent і теж залежить від keyword.
+        if (!$this->redisCache->isEnabled() || ($filter === null && $this->isSearchRequest())) {
             return parent::getCatalogFeatures($filter);
         }
-        $key = $this->redisCache->makeVersionedKey('catalog_features', [CacheTags::PRODUCTS_ALL], [$filter]);
-        $cached = $this->redisCache->get($key);
-        if ($cached !== null) {
-            return ExtenderFacade::execute(
+        $args = func_get_args();
+
+        return $this->redisCache->remember(
+            'catalog_features',
+            [CacheTags::PRODUCTS_ALL],
+            [$filter],
+            fn () => parent::getCatalogFeatures($filter),
+            $this->redisCache->getHelperTtl('catalog_features'),
+            fn ($cached) => ExtenderFacade::execute(
                 \Okay\Helpers\CatalogHelper::class . '::getCatalogFeatures',
                 $cached,
-                func_get_args()
-            );
-        }
-        $result = parent::getCatalogFeatures($filter);
-        $this->redisCache->set($key, $result, $this->redisCache->getHelperTtl('catalog_features'));
-        return $result;
+                $args
+            )
+        );
+    }
+
+    /**
+     * Ці значення залежать від keyword запиту, а ключ кеша — ні: фільтр, покладений
+     * туди пошуком, віддавався б усьому каталогу до кінця TTL. Окремий ключ на
+     * кожен запит сенсу не має — пошукові фрази майже не повторюються.
+     */
+    private function isSearchRequest(): bool
+    {
+        return $this->filterHelper->getKeyword() !== null;
     }
 }

@@ -72,8 +72,10 @@ class ProductsHelper extends \Okay\Helpers\ProductsHelper
             if (\array_key_exists('images', $imagesCached)) { $product->images = $imagesCached['images']; }
             if (\array_key_exists('image',  $imagesCached)) { $product->image  = $imagesCached['image']; }
         } else {
+            // parent, а не self: перевизначений attachImages поклав би ті самі
+            // дані ще й під власним ключем, який на цьому шляху ніхто не читає.
             $tmp = [$productId => $product];
-            $tmp = $this->attachImages($tmp);
+            $tmp = parent::attachImages($tmp);
             $product = reset($tmp);
             $ttl = $this->redisCache->getHelperTtl('product_attach_images') ?? 3600;
             $this->redisCache->set($imagesKey, [
@@ -195,23 +197,28 @@ class ProductsHelper extends \Okay\Helpers\ProductsHelper
         if (!$this->redisCache->isEnabled()) {
             return parent::getList($filter, $sortName, $excludedFields);
         }
-        $tags = [CacheTags::PRODUCTS_LIST, CacheTags::PRODUCTS_ALL];
-        $key  = $this->redisCache->makeVersionedKey('products_get_list', $tags, [$filter, $sortName, $excludedFields]);
-        $cached = $this->redisCache->get($key);
-        if ($cached !== null) {
-            $this->warmRouteAliases($cached);
-            return ExtenderFacade::execute(
-                \Okay\Helpers\ProductsHelper::class . '::getList',
-                $cached,
-                func_get_args()
-            );
-        }
-        $result = parent::getList($filter, $sortName, $excludedFields);
-        if (!empty($result)) {
-            $ttl = $this->redisCache->getHelperTtl('products_get_list');
-            $this->redisCache->set($key, $result, $ttl);
-        }
-        return $result;
+        $args = func_get_args();
+
+        return $this->redisCache->remember(
+            'products_get_list',
+            [CacheTags::PRODUCTS_LIST, CacheTags::PRODUCTS_ALL],
+            [$filter, $sortName, $excludedFields],
+            fn () => parent::getList($filter, $sortName, $excludedFields),
+            $this->redisCache->getHelperTtl('products_get_list'),
+            function ($cached) use ($args) {
+                $this->warmRouteAliases($cached);
+
+                return ExtenderFacade::execute(
+                    \Okay\Helpers\ProductsHelper::class . '::getList',
+                    $cached,
+                    $args
+                );
+            },
+            // Порожню вибірку не кешуємо: у пошуку кожна фраза дає свій ключ,
+            // а розширення однаково перезапитує за порожнім результатом — тобто
+            // сотні ключів без користі.
+            static fn ($result) => !empty($result)
+        );
     }
 
     /**

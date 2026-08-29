@@ -24,8 +24,43 @@ class RedisCacheService
     /** Понад стільки тегів вектор версій згортається в хеш. */
     private const MAX_INLINE_TAGS = 4;
 
+    /** Скільки протухле значення ще можна віддавати, поки йде перерахунок. */
+    private const SWR_GRACE = 3600;
+
+    /** Замок на перерахунок; переживає час самого перерахунку з запасом. */
+    private const SWR_LOCK_TTL = 60;
+
+    /**
+     * Конверти лежать під власним іменем. Інакше відкат модуля віддав би
+     * конверт старому коду, який чекає на голе значення, — і це не помилка
+     * кешу, а TypeError у викликача.
+     */
+    private const SWR_NAME_SUFFIX = ':swr';
+
+    /** @var array<string, true> ключі, перерахунок яких уже заплановано в цьому запиті */
+    private array $refreshing = [];
+
     /** Вікно схлопування повторних bump одного тега, секунди. */
     private const BUMP_COLLAPSE_WINDOW = 1.0;
+
+    /**
+     * Скільки не торкатись Redis після провалу з'єднання.
+     *
+     * Таймаут з'єднання не поширюється на резолв імені: зниклий із DNS хост
+     * висить секундами, скільки б не стояло в connect(). Без пам'яті між
+     * запитами цю ціну платить кожен запит, тобто сайт формально живий і
+     * фактично лежить.
+     */
+    private const BREAKER_TTL = 10;
+
+    /**
+     * Стеля списку недоставлених bump. Довший простій дешевше й надійніше
+     * закрити повним скиданням кешу, ніж тягнути список без краю.
+     */
+    private const PENDING_BUMPS_BYTES = 16384;
+
+    /** Мітка «лік втрачено»: на відновленні скидаємо кеш цілком. */
+    private const PENDING_OVERFLOW = '*';
 
     private array $helperTtlCache = [];
     private array $versionMemo = [];
@@ -36,6 +71,10 @@ class RedisCacheService
     private array $pendingBumps = [];
     private bool $pendingFlushRegistered = false;
     private int $reconnectsLeft = 2;
+    private bool $breakerSuppressed = false;
+    private bool $replayingBumps = false;
+    private bool $stateDirResolved = false;
+    private ?string $stateDirMemo = null;
 
     private int $statHits = 0;
     private int $statMisses = 0;
@@ -110,8 +149,117 @@ class RedisCacheService
             $this->lastError = 'Redis disabled or extension not installed';
             return null;
         }
+
+        $trippedAt = $this->breakerTrippedAt();
+        if ($trippedAt !== null && (time() - $trippedAt) < self::BREAKER_TTL) {
+            $this->lastError = 'Redis unreachable, retry suppressed for ' . self::BREAKER_TTL . 's';
+            $this->breakerSuppressed = true;
+            return null;
+        }
+        // Позначку оновлюємо ДО спроби: поки цей запит платить таймаут,
+        // паралельні бачать свіжий запобіжник і не платять його теж.
+        if ($trippedAt !== null) {
+            $this->armBreaker();
+        }
+
         $this->client = $this->connectBare(true, true);
+        if ($this->client === null) {
+            $this->armBreaker();
+            return null;
+        }
+
+        if ($trippedAt !== null) {
+            $this->disarmBreaker();
+        }
+        $this->replayPendingBumps();
+
         return $this->client;
+    }
+
+    /**
+     * Власний каталог у tmp, а не файли поруч із чужими.
+     *
+     * Каталог tmp доступний на запис усім, а ім'я файлу передбачуване, тож
+     * підкладений заздалегідь симлінк перенаправив би наш запис у будь-який
+     * файл, доступний нам на запис. Тому не «шлях існує», а «каталог наш і
+     * тільки наш»: uid у назві (планувальник працює від root, веб від
+     * www-data), права 0700 і перевірка через lstat, яка не йде за посиланням.
+     *
+     * Не в cache/ застосунку: його вайпає entrypoint при старті, а разом із ним
+     * зник би й борг по bump, тобто саме те, що має пережити перезапуск.
+     */
+    private function stateDir(): ?string
+    {
+        if ($this->stateDirResolved) {
+            return $this->stateDirMemo;
+        }
+        $this->stateDirResolved = true;
+
+        $uid = function_exists('posix_geteuid') ? posix_geteuid() : -1;
+        if ($uid < 0) {
+            // Без posix не дізнатись, від кого ми працюємо, а спільна назва
+            // звела б докупи файли різних користувачів.
+            return null;
+        }
+        $dir = sys_get_temp_dir() . '/okay-redis-' . $uid;
+        if (!is_dir($dir)) {
+            @mkdir($dir, 0700, true);
+        }
+
+        // Чужий або підмінений каталог: краще лишитись без запобіжника, ніж
+        // писати кудись, куди нас завели.
+        return $this->stateDirMemo = (self::isOwnPrivateDir($dir, $uid) ? $dir : null);
+    }
+
+    /** lstat, а не stat: за посиланням не йдемо, інакше перевіряли б ціль. */
+    private static function isOwnPrivateDir(string $dir, int $uid): bool
+    {
+        $stat = @lstat($dir);
+
+        return $stat !== false
+            && ($stat['mode'] & 0170000) === 0040000
+            && $stat['uid'] === $uid
+            && ($stat['mode'] & 0077) === 0;
+    }
+
+    /** Адреса Redis у назві — щоб два сервери не ділили ні запобіжник, ні борг. */
+    protected function stateFile(string $kind): ?string
+    {
+        $dir = $this->stateDir();
+        if ($dir === null) {
+            return null;
+        }
+        $config = $this->loadConfig();
+        $target = substr(md5($config['host'] . ':' . $config['port'] . ':' . $config['db']), 0, 8);
+
+        return $dir . '/' . $kind . '-' . $target;
+    }
+
+    private function breakerTrippedAt(): ?int
+    {
+        $file = $this->stateFile('down');
+        if ($file === null) {
+            return null;
+        }
+        $at = @filemtime($file);
+
+        return $at === false ? null : $at;
+    }
+
+    private function armBreaker(): void
+    {
+        $file = $this->stateFile('down');
+        if ($file !== null && !is_link($file)) {
+            @touch($file);
+        }
+    }
+
+    private function disarmBreaker(): void
+    {
+        $file = $this->stateFile('down');
+        if ($file !== null) {
+            @unlink($file);
+        }
     }
 
     private function authenticateRedis(object $redis, ?string $username, ?string $password): bool
@@ -150,7 +298,7 @@ class RedisCacheService
      *        Непостійне потрібне тим шляхам, що роблять close() — закривати
      *        persistent-з'єднання не можна.
      */
-    private function connectBare(bool $applyKeyPrefix = true, bool $persistent = false)
+    protected function connectBare(bool $applyKeyPrefix = true, bool $persistent = false)
     {
         $config = $this->loadConfig();
         try {
@@ -223,6 +371,10 @@ class RedisCacheService
                 || (is_string($resp) && in_array(strtoupper(trim($resp)), ['PONG', '+PONG'], true));
             if (!$ok) {
                 $this->lastError = 'Unexpected PING response from Redis';
+            } else {
+                // Кнопка «перевірити» в адмінці — сигнал, що конфіг полагодили.
+                // Змушувати чекати вікно запобіжника після цього немає сенсу.
+                $this->disarmBreaker();
             }
             return $ok;
         } catch (\Throwable $e) {
@@ -233,21 +385,25 @@ class RedisCacheService
         }
     }
 
-    public function flushAll(): void
+    public function flushAll(): bool
     {
         if (!$this->isEnabled()) {
-            return;
+            return false;
         }
         $client = $this->connectBare(false);
         if (!$client) {
-            return;
+            return false;
         }
         try {
             $client->flushDB();
             $this->versionMemo = [];
             $this->getMemo = [];
+
+            return true;
         } catch (\Throwable $e) {
             $this->lastError = $e->getMessage();
+
+            return false;
         } finally {
             try { $client->close(); } catch (\Throwable $e) {}
         }
@@ -429,6 +585,7 @@ class RedisCacheService
         }
         $client = $this->initClient();
         if (!$client) {
+            $this->recordUndeliveredBump($tag);
             return;
         }
         try {
@@ -441,7 +598,81 @@ class RedisCacheService
             unset($this->versionMemo[$tag], $this->pendingBumps[$tag]);
         } catch (\Throwable $e) {
             $this->lastError = $e->getMessage();
+            $this->recordUndeliveredBump($tag);
             $this->dropClient();
+        }
+    }
+
+    /**
+     * Недоставлений bump переживає процес.
+     *
+     * Інакше зміна ціни чи наявності в адмінці, зроблена в хвилину недоступності
+     * Redis, зникає безслідно: у базі нове значення, у кеші старе, і вітрина
+     * віддає стару ціну до кінця TTL. Тег дописуємо у файл і піднімаємо версію
+     * при першому ж вдалому з'єднанні.
+     */
+    private function recordUndeliveredBump(string $tag): void
+    {
+        $file = $this->stateFile('bumps');
+        if ($file === null || is_link($file)) {
+            return;
+        }
+        // Без скидання кешу stat filesize() віддає розмір, побачений уперше, і
+        // стеля не спрацьовує ніколи — на PHP 8.0 це видно, на 8.5 маскується.
+        clearstatcache(true, $file);
+        $size = @filesize($file);
+        if ($size !== false && $size > self::PENDING_BUMPS_BYTES) {
+            // Список переріс стелю — далі точний перелік недосяжний, і чесніше
+            // визнати це зараз, ніж мовчки загубити хвіст.
+            @file_put_contents($file, self::PENDING_OVERFLOW . "\n", LOCK_EX);
+            return;
+        }
+        @file_put_contents($file, $tag . "\n", FILE_APPEND | LOCK_EX);
+    }
+
+    /** Борг за час недоступності: віддаємо його одразу після з'єднання. */
+    private function replayPendingBumps(): void
+    {
+        // Помилка посеред віддачі боргу роняє з'єднання, а наступний bump
+        // піднімає його заново — і той викликав би віддачу вкладено.
+        if ($this->replayingBumps) {
+            return;
+        }
+        $file = $this->stateFile('bumps');
+        if ($file === null || is_link($file)) {
+            return;
+        }
+        // Забираємо список перейменуванням, а не «прочитати й видалити»: між
+        // цими двома діями сусідній воркер устигає дописати тег, і той зникає
+        // разом із файлом. Перейменування атомарне, а те, що допишуть після
+        // нього, лягає у новий файл і дочекається наступного разу.
+        $claimed = $file . '.' . getmypid();
+        if (!@rename($file, $claimed)) {
+            return;
+        }
+        $tags = @file($claimed, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+        @unlink($claimed);
+        if (!is_array($tags) || $tags === []) {
+            return;
+        }
+
+        $this->replayingBumps = true;
+        try {
+            if (in_array(self::PENDING_OVERFLOW, $tags, true)) {
+                if (!$this->flushAll()) {
+                    // Список ми вже забрали, а скинути кеш не вдалось — без
+                    // цього рядка борг зник би, і стара ціна лишилась би до
+                    // кінця TTL уже без жодного сліду.
+                    $this->recordUndeliveredBump(self::PENDING_OVERFLOW);
+                }
+
+                return;
+            }
+            foreach (array_unique($tags) as $tag) {
+                $this->bump($tag);
+            }
+        } finally {
+            $this->replayingBumps = false;
         }
     }
 
@@ -471,6 +702,18 @@ class RedisCacheService
         // Прапорець ставить сам bump() — і лише на успішному INCR. Інакше одна
         // проковтнута помилка назавжди прибрала б усі наступні bump цього тега.
         $this->bump($tag);
+    }
+
+    /**
+     * Знецінює все, що залежить від цін і складу лістингів.
+     *
+     * Названий шов для сусідніх модулів: інакше кожен, кому треба скинути
+     * товарний кеш, мусив би знати наш словник тегів і ламався б від його зміни.
+     */
+    public function invalidateProductData(): void
+    {
+        $this->bumpOnce(CacheTags::PRODUCTS_ALL);
+        $this->bumpOnce(CacheTags::PRODUCTS_LIST);
     }
 
     /** Хвіст серії: піднімає версії, борг за якими лишився після схлопування. */
@@ -526,7 +769,189 @@ class RedisCacheService
             'round_trips' => $this->statRoundTrips,
             'ms'          => round($this->statSeconds * 1000, 2),
             'error'       => $this->lastError,
+            // Справжню причину вже записав той запит, який звів запобіжник.
+            // Повторювати її кожним придушеним — топити лог у собі.
+            'suppressed'  => $this->breakerSuppressed,
         ];
+    }
+
+    /**
+     * Значення з кешу; протухле віддається одразу, а перерахунок їде після
+     * відповіді. Інакше кожні TTL секунд комусь із відвідувачів дістається
+     * повний перерахунок — на сторінці бренду це секунда замість десятих.
+     *
+     * Свіжість тримає конверт усередині значення, а не TTL ключа: TTL тут лише
+     * страховка від витіснення, коректність дає версія тега в імені ключа.
+     *
+     * Продюсер має бути чистим: на протухлому влучанні його викликають ще раз
+     * після відповіді, коли вивід уже відправлено, а сесію закрито заради її
+     * файлового замка. Метод із побічним ефектом (запис у $_SESSION, лист,
+     * лічильник) сюди не загортати.
+     *
+     * @param string[] $tags
+     * @param mixed[] $args
+     * @param callable $producer що порахувати при промаху
+     * @param callable|null $onHit чим прогнати значення з кешу (ланцюг розширень)
+     * @return mixed
+     */
+    public function remember(
+        string $name,
+        array $tags,
+        array $args,
+        callable $producer,
+        ?int $ttl = null,
+        ?callable $onHit = null,
+        ?callable $worthStoring = null
+    ) {
+        if (!$this->isEnabled()) {
+            return $producer();
+        }
+
+        $key = $this->makeVersionedKey($name . self::SWR_NAME_SUFFIX, $tags, $args);
+        $cached = $this->get($key);
+
+        if ($cached !== null) {
+            [$value, $freshUntil] = $this->unwrap($cached);
+            if ($freshUntil !== null && $this->now() >= $freshUntil) {
+                $this->scheduleRefresh($key, $producer, $ttl, $worthStoring);
+            }
+
+            return $onHit === null ? $value : $onHit($value);
+        }
+
+        $value = $producer();
+        if ($worthStoring === null || $worthStoring($value)) {
+            $this->storeFresh($key, $value, $ttl);
+        }
+
+        return $value;
+    }
+
+    /**
+     * Гола величина сюди вже не дійде: під ключем із SWR_NAME_SUFFIX пише лише
+     * storeFresh(). Розгортання лишається страховкою від чужого запису, і таке
+     * значення вважаємо свіжим — інакше воно спричинило б лавину перерахунків.
+     *
+     * @return array{0: mixed, 1: float|null}
+     */
+    private function unwrap($cached): array
+    {
+        if (is_array($cached) && isset($cached['__swr'], $cached['v'], $cached['f'])) {
+            return [$cached['v'], (float) $cached['f']];
+        }
+
+        return [$cached, null];
+    }
+
+    private function storeFresh(string $key, $value, ?int $ttl): void
+    {
+        $ttl = (int) ($ttl ?: $this->loadConfig()['ttl']);
+        if ($ttl <= 0) {
+            $ttl = self::MIN_TTL;
+        }
+
+        $envelope = ['__swr' => 1, 'v' => $value, 'f' => $this->now() + $ttl];
+        // Фізичний TTL із запасом: протухле значення ще має чим відповісти,
+        // поки йде фоновий перерахунок.
+        $this->set($key, $envelope, $ttl + max($ttl, self::SWR_GRACE));
+    }
+
+    /**
+     * Перерахунок після відповіді й лише в одному процесі: без замка сплеск
+     * трафіку запустив би його стільки разів, скільки прийшло запитів.
+     */
+    private function scheduleRefresh(string $key, callable $producer, ?int $ttl, ?callable $worthStoring = null): void
+    {
+        if (isset($this->refreshing[$key])) {
+            return;
+        }
+        // Ставимо позначку до спроби замка: інакше кожен повторний виклик того
+        // самого ключа в межах запиту знову ходив би в Redis.
+        $this->refreshing[$key] = true;
+
+        if (!$this->acquireRefreshLock($key)) {
+            return;
+        }
+
+        $this->defer(function () use ($key, $producer, $ttl, $worthStoring): void {
+            try {
+                $value = $producer();
+                if ($worthStoring !== null && !$worthStoring($value)) {
+                    // Порожньому перерахунку місця в кеші немає, але замок
+                    // знімаємо: інакше ключ лишився б без спроб до кінця SWR_LOCK_TTL.
+                    $this->releaseRefreshLock($key);
+                    return;
+                }
+                $this->storeFresh($key, $value, $ttl);
+                // Без цього замок тримає ключ SWR_LOCK_TTL, і налаштований TTL
+                // менший за нього просто не діяв би.
+                $this->releaseRefreshLock($key);
+            } catch (\Throwable $e) {
+                // Протухле значення лишається на місці — краще старе, ніж порожньо.
+                // Замок не знімаємо: хай пауза перед наступною спробою.
+                $this->lastError = 'SWR refresh failed: ' . $e->getMessage();
+            }
+        });
+    }
+
+    /** Робота після відповіді. Під CLI вона просто виконається в кінці процесу. */
+    protected function defer(callable $task): void
+    {
+        register_shutdown_function(function () use ($task): void {
+            $this->runDeferred($task);
+        });
+    }
+
+    /** Тіло відкладеної роботи окремо: shutdown-функцію інакше не викликати з тесту. */
+    protected function runDeferred(callable $task): void
+    {
+        if (function_exists('fastcgi_finish_request')) {
+            @fastcgi_finish_request();
+        }
+        // Сесію PHP закриває аж після shutdown-функцій, тож без цього перерахунок
+        // тримає її файловий замок — і наступний запит того самого відвідувача
+        // стоїть на session_start() рівно стільки, скільки ми йому зекономили.
+        if (session_status() === PHP_SESSION_ACTIVE) {
+            session_write_close();
+        }
+        $task();
+    }
+
+    private function refreshLockKey(string $key): string
+    {
+        return $key . ':lock';
+    }
+
+    private function releaseRefreshLock(string $key): void
+    {
+        $client = $this->initClient();
+        if (!$client) {
+            return;
+        }
+
+        try {
+            $client->del($this->refreshLockKey($key));
+        } catch (\Throwable $e) {
+            // Замок і сам протухне через SWR_LOCK_TTL.
+            $this->lastError = $e->getMessage();
+            $this->dropClient();
+        }
+    }
+
+    private function acquireRefreshLock(string $key): bool
+    {
+        $client = $this->initClient();
+        if (!$client) {
+            return false;
+        }
+
+        try {
+            return (bool) $client->set($this->refreshLockKey($key), '1', ['nx', 'ex' => self::SWR_LOCK_TTL]);
+        } catch (\Throwable $e) {
+            $this->lastError = $e->getMessage();
+            $this->dropClient();
+            return false;
+        }
     }
 
     public function get(string $key)
