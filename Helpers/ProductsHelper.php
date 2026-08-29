@@ -38,6 +38,9 @@ class ProductsHelper extends \Okay\Helpers\ProductsHelper
         if (!$this->redisCache->isEnabled()) {
             return parent::attachProductData($product);
         }
+        // Аргументи знімаємо до роботи: далі $product перепризначається, а
+        // func_get_args() з PHP 7.0 віддає поточне значення, не вихідне.
+        $args = func_get_args();
 
         $productId = (int) $product->id;
         $tags = [CacheTags::product($productId), CacheTags::PRODUCTS_ALL];
@@ -99,7 +102,7 @@ class ProductsHelper extends \Okay\Helpers\ProductsHelper
         return ExtenderFacade::execute(
             \Okay\Helpers\ProductsHelper::class . '::attachProductData',
             $product,
-            func_get_args()
+            $args
         );
     }
 
