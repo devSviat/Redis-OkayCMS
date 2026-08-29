@@ -9,7 +9,7 @@
 </div>
 
 {* Алерти: збережено / результат тесту підключення *}
-{if $message_success || $test_result === true || $test_result === false}
+{if $message_success || $test_result === true || $test_result === false || $flush_error !== null}
     <div class="row">
         <div class="col-lg-12">
             {if $message_success}
@@ -23,6 +23,14 @@
                 <div class="alert alert--success">
                     <div class="alert__content">
                         <div class="alert__title">{$btr->sviat_redis_connection_success|escape}</div>
+                    </div>
+                </div>
+            {/if}
+            {if $flush_error !== null}
+                <div class="alert alert--warning">
+                    <div class="alert__content">
+                        <div class="alert__title">{$btr->sviat_redis_flush_failed|escape}</div>
+                        {if $flush_error}<div class="alert__text">{$flush_error|escape}</div>{/if}
                     </div>
                 </div>
             {/if}

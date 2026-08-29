@@ -144,7 +144,7 @@ class Init extends AbstractInit
             ['class' => VariantsCacheInvalidator::class, 'method' => 'onVariantsDelete']
         );
 
-        // Images (NEW — fixes the stale-image bug)
+        // Images
         $this->registerQueueExtension(
             ['class' => ImagesEntity::class, 'method' => 'add'],
             ['class' => ImagesCacheInvalidator::class, 'method' => 'onImageAdd']
@@ -158,7 +158,7 @@ class Init extends AbstractInit
             ['class' => ImagesCacheInvalidator::class, 'method' => 'onImageDelete']
         );
 
-        // Special Images (NEW)
+        // Special Images
         $this->registerQueueExtension(
             ['class' => SpecialImagesEntity::class, 'method' => 'add'],
             ['class' => SpecialImagesCacheInvalidator::class, 'method' => 'onSpecialImageAdd']
@@ -172,7 +172,7 @@ class Init extends AbstractInit
             ['class' => SpecialImagesCacheInvalidator::class, 'method' => 'onSpecialImageDelete']
         );
 
-        // Features (NEW)
+        // Features
         $this->registerQueueExtension(
             ['class' => FeaturesEntity::class, 'method' => 'add'],
             ['class' => FeaturesCacheInvalidator::class, 'method' => 'onFeatureAdd']
@@ -186,7 +186,7 @@ class Init extends AbstractInit
             ['class' => FeaturesCacheInvalidator::class, 'method' => 'onFeatureDelete']
         );
 
-        // Features Values (NEW)
+        // Features Values
         $this->registerQueueExtension(
             ['class' => FeaturesValuesEntity::class, 'method' => 'add'],
             ['class' => FeaturesValuesCacheInvalidator::class, 'method' => 'onFeatureValueAdd']

@@ -38,8 +38,13 @@ class CacheStatsReporter implements ExtensionInterface
         // кожен запит ховає в логах справжні помилки.
         register_shutdown_function(function () {
             $stats = $this->redis->getRequestStats();
-            if (!empty($stats['error'])) {
+            if (!empty($stats['error']) && empty($stats['suppressed'])) {
                 $this->logger->warning('redis cache: ' . $this->format($stats));
+            } elseif ($this->config->get('debug_mode')) {
+                // Заголовок несе лише знімок до рендеру, а лістинги читають кеш
+                // під час нього — на головній це виглядає як «кеш не працює».
+                // Підсумок видно тільки звідси, тож на деві пишемо його в лог.
+                $this->logger->info('redis cache total: ' . $this->format($stats));
             }
         });
 

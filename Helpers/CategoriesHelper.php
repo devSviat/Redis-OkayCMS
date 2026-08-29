@@ -29,7 +29,8 @@ class CategoriesHelper extends \Okay\Helpers\CategoriesHelper
 
     public function getCatalogFeatures(object $category): array
     {
-        if (!$this->redisCache->isEnabled()) {
+        // parent збирає фільтр через getCatalogFeaturesFilter(), а той читає keyword запиту.
+        if (!$this->redisCache->isEnabled() || $this->filterHelper->getKeyword() !== null) {
             return parent::getCatalogFeatures($category);
         }
         $categoryId = $category->id ?? null;

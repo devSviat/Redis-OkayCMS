@@ -11,6 +11,7 @@ class RedisSettingsAdmin extends IndexAdmin
     {
         $testResult = null;
         $error = null;
+        $flushError = null;
 
         if ($this->request->method('post')) {
             $this->settings->set('sviat__redis__enabled', (int)$this->request->post('enabled'));
@@ -43,7 +44,11 @@ class RedisSettingsAdmin extends IndexAdmin
                     $error = $redisCache->getLastError();
                 }
             } elseif ($this->request->post('action') === 'flush_helpers') {
-                $redisCache->flushAll();
+                // Мовчазна кнопка гірша за зламану: адмін бачить «натиснув» і
+                // йде далі, а кеш лишається старим.
+                if (!$redisCache->flushAll()) {
+                    $flushError = $redisCache->getLastError() ?? '';
+                }
             }
 
             if ($this->request->post('action') === 'save') {
@@ -79,6 +84,7 @@ class RedisSettingsAdmin extends IndexAdmin
         $this->design->assign('redis_stats', $stats);
         $this->design->assign('test_result', $testResult);
         $this->design->assign('test_error', $error);
+        $this->design->assign('flush_error', $flushError);
 
         $this->response->setContent($this->design->fetch('redis_settings.tpl'));
     }

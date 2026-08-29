@@ -1,6 +1,6 @@
 {
   "Okay": "4.5.2",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "name": "Redis cache",
   "description": "Кешування Redis",
   "vendor": {
