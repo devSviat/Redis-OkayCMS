@@ -34,17 +34,16 @@ class CacheStatsReporter implements ExtensionInterface
     public function reportStats(): void
     {
         // Поза гейтом debug_mode: на проді він вимкнений, а мовчазна деградація
-        // до роботи без кешу найдорожча саме там. Пишемо лише збої — рядок на
-        // кожен запит ховає в логах справжні помилки.
+        // до роботи без кешу найдорожча саме там.
+        //
+        // У лог іде ЛИШЕ збій. Підсумок по кожному запиту писався тут під
+        // debug_mode — і за пів дня роботи давав сотні рядків INFO, серед яких
+        // справжню помилку вже не знайти. Стан кеша на деві показує заголовок
+        // X-Redis-Prerender.
         register_shutdown_function(function () {
             $stats = $this->redis->getRequestStats();
             if (!empty($stats['error']) && empty($stats['suppressed'])) {
                 $this->logger->warning('redis cache: ' . $this->format($stats));
-            } elseif ($this->config->get('debug_mode')) {
-                // Заголовок несе лише знімок до рендеру, а лістинги читають кеш
-                // під час нього — на головній це виглядає як «кеш не працює».
-                // Підсумок видно тільки звідси, тож на деві пишемо його в лог.
-                $this->logger->info('redis cache total: ' . $this->format($stats));
             }
         });
 
