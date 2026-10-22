@@ -33,7 +33,9 @@
 
 ## Вимоги
 
-- OkayCMS v4.5.3 (чиста або [форк](https://github.com/devSviat/OkayCMS)); PHP 7.4 або 8.1–8.5
+- PHP 8.3+
+- OkayCMS 4.5.3 (чиста або [форк](https://github.com/devSviat/OkayCMS))
+- Перевірено на PHP 8.5 — на чистій OkayCMS 4.5.3 і на форку
 - Встановлений PHP-розширення `redis` (phpredis)
 - Запущений Redis сервер (локально або на окремому сервері)
 
