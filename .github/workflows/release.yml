@@ -38,9 +38,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Сток 4.5.3 підтримує 7.4 і 8.1–8.5, форк — 8.5. Код модуля мусить
-        # бути чистим на межах цього ряду, бо їде в один архів.
-        php: ['7.4', '8.1', '8.5']
+        # Модулі вимагають PHP 8.3+ і перевіряються на 8.5 — на ній стоять і
+        # сток 4.5.3, і форк.
+        php: ['8.5']
     steps:
       - uses: actions/checkout@v4
 
@@ -66,7 +66,7 @@ jobs:
             repo: OkayCMS/OkayCMS
             ref: '4.5.3'
             # composer.lock стоку 4.5.3 зібраний під PHP 8.5. Тести написані під
-            # PHP 8; синтаксис під 7.4 перевіряє окремий job lint.
+            # PHP 8.5, як і форк.
             php: '8.5'
           - target: fork
             repo: devSviat/OkayCMS
@@ -249,7 +249,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        php: ['7.4', '8.1', '8.5']
+        php: ['8.5']
     steps:
       - uses: actions/checkout@v4
         with:
@@ -282,7 +282,7 @@ jobs:
             repo: OkayCMS/OkayCMS
             ref: '4.5.3'
             # composer.lock стоку 4.5.3 зібраний під PHP 8.5. Тести написані під
-            # PHP 8; синтаксис під 7.4 перевіряє окремий job lint.
+            # PHP 8.5, як і форк.
             php: '8.5'
           - target: fork
             repo: devSviat/OkayCMS
