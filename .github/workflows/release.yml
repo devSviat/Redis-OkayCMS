@@ -69,7 +69,7 @@ jobs:
             # PHP 8.5, як і форк.
             php: '8.5'
           - target: fork
-            repo: devSviat/OkayCMS
+            repo: devSviat/OkayCMS-Fork
             ref: main
             php: '8.5'
     steps:
@@ -285,7 +285,7 @@ jobs:
             # PHP 8.5, як і форк.
             php: '8.5'
           - target: fork
-            repo: devSviat/OkayCMS
+            repo: devSviat/OkayCMS-Fork
             ref: main
             php: '8.5'
     steps:

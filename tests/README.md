@@ -95,7 +95,7 @@ class SomeServiceTest extends TestCase
 ## Якщо модуль має працювати і на форку OkayCMS
 
 Крім стокової OkayCMS, модуль тримає сумісність із
-[форком OkayCMS](https://github.com/devSviat/OkayCMS) — окремою збіркою рушія на
+[форком OkayCMS](https://github.com/devSviat/OkayCMS-Fork) — окремою збіркою рушія на
 PHP 8.5 зі Smarty 5. Якщо ви працюєте лише зі звичайною OkayCMS, цей розділ
 можна пропустити.
 
@@ -126,5 +126,5 @@ if (PHP_VERSION_ID < 80100) { $p->setAccessible(true); }
 
 1. `php -l` на всьому коді модуля під 7.4, 8.0 і 8.5;
 2. модуль ставиться в справжній рушій — окремо в стокову OkayCMS, окремо у
-   [форк](https://github.com/devSviat/OkayCMS) — і там запускається `phpunit`;
+   [форк](https://github.com/devSviat/OkayCMS-Fork) — і там запускається `phpunit`;
 3. лише після цього піднімається версія, ставиться тег і збирається архів.
