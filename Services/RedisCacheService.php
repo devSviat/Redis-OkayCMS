@@ -6,7 +6,7 @@ use Okay\Core\Settings;
 
 class RedisCacheService
 {
-    private const VERSION_KEY_PREFIX = 'helpers:ver:';
+    private const string VERSION_KEY_PREFIX = 'helpers:ver:';
 
     private Settings $settings;
     private $client = null;
@@ -19,29 +19,29 @@ class RedisCacheService
      * з TTL, тож запис без нього зробив би кеш невиселюваним — і тиск пішов
      * би на лічильники версій, виселення яких «воскрешає» старі дані.
      */
-    private const MIN_TTL = 60;
+    private const int MIN_TTL = 60;
 
     /** Понад стільки тегів вектор версій згортається в хеш. */
-    private const MAX_INLINE_TAGS = 4;
+    private const int MAX_INLINE_TAGS = 4;
 
     /** Скільки протухле значення ще можна віддавати, поки йде перерахунок. */
-    private const SWR_GRACE = 3600;
+    private const int SWR_GRACE = 3600;
 
     /** Замок на перерахунок; переживає час самого перерахунку з запасом. */
-    private const SWR_LOCK_TTL = 60;
+    private const int SWR_LOCK_TTL = 60;
 
     /**
      * Конверти лежать під власним іменем. Інакше відкат модуля віддав би
      * конверт старому коду, який чекає на голе значення, — і це не помилка
      * кешу, а TypeError у викликача.
      */
-    private const SWR_NAME_SUFFIX = ':swr';
+    private const string SWR_NAME_SUFFIX = ':swr';
 
     /** @var array<string, true> ключі, перерахунок яких уже заплановано в цьому запиті */
     private array $refreshing = [];
 
     /** Вікно схлопування повторних bump одного тега, секунди. */
-    private const BUMP_COLLAPSE_WINDOW = 1.0;
+    private const float BUMP_COLLAPSE_WINDOW = 1.0;
 
     /**
      * Скільки не торкатись Redis після провалу з'єднання.
@@ -51,16 +51,16 @@ class RedisCacheService
      * запитами цю ціну платить кожен запит, тобто сайт формально живий і
      * фактично лежить.
      */
-    private const BREAKER_TTL = 10;
+    private const int BREAKER_TTL = 10;
 
     /**
      * Стеля списку недоставлених bump. Довший простій дешевше й надійніше
      * закрити повним скиданням кешу, ніж тягнути список без краю.
      */
-    private const PENDING_BUMPS_BYTES = 16384;
+    private const int PENDING_BUMPS_BYTES = 16384;
 
     /** Мітка «лік втрачено»: на відновленні скидаємо кеш цілком. */
-    private const PENDING_OVERFLOW = '*';
+    private const string PENDING_OVERFLOW = '*';
 
     private array $helperTtlCache = [];
     private array $versionMemo = [];
@@ -283,7 +283,7 @@ class RedisCacheService
             if (self::$authSupportsTwoArgs) {
                 return (bool) $redis->auth($user, $passStr);
             }
-        } catch (\ReflectionException $e) {
+        } catch (\ReflectionException) {
             // fallthrough
         }
         if (!method_exists($redis, 'rawCommand')) {
@@ -326,9 +326,7 @@ class RedisCacheService
                 $redis->setOption($optReadTimeout, 0.5);
             }
             if (!$this->authenticateRedis($redis, $config['username'], $config['auth'])) {
-                if ($this->lastError === null) {
-                    $this->lastError = 'Redis auth failed';
-                }
+                $this->lastError ??= 'Redis auth failed';
                 return null;
             }
             // Безумовно: у persistent-з'єднанні обраний номер БД лишається від
@@ -381,7 +379,7 @@ class RedisCacheService
             $this->lastError = $e->getMessage();
             return false;
         } finally {
-            try { $client->close(); } catch (\Throwable $e) {}
+            try { $client->close(); } catch (\Throwable) {}
         }
     }
 
@@ -405,7 +403,7 @@ class RedisCacheService
 
             return false;
         } finally {
-            try { $client->close(); } catch (\Throwable $e) {}
+            try { $client->close(); } catch (\Throwable) {}
         }
     }
 
@@ -452,7 +450,7 @@ class RedisCacheService
             if ($sl->hasService(\Okay\Core\Languages::class)) {
                 $langId = (int) $sl->getService(\Okay\Core\Languages::class)->getLangId();
             }
-        } catch (\Throwable $e) {}
+        } catch (\Throwable) {}
 
         $currencyId = isset($_SESSION['currency_id']) ? (int) $_SESSION['currency_id'] : 0;
         $groupId = 0;
@@ -468,7 +466,7 @@ class RedisCacheService
                     }
                 }
             }
-        } catch (\Throwable $e) {}
+        } catch (\Throwable) {}
 
         $this->context = ['lang' => $langId ?? 0, 'currency' => $currencyId, 'group' => $groupId];
         return $this->context;
@@ -535,7 +533,7 @@ class RedisCacheService
 
     public function versions(array $tags): array
     {
-        $tags = array_values(array_unique(array_filter(array_map('strval', $tags))));
+        $tags = array_values(array_unique(array_filter(array_map(strval(...), $tags))));
         if ($tags === []) {
             return [];
         }
@@ -746,7 +744,7 @@ class RedisCacheService
     private function dropClient(): void
     {
         if ($this->client !== null) {
-            try { $this->client->close(); } catch (\Throwable $e) {}
+            try { $this->client->close(); } catch (\Throwable) {}
         }
         $this->client = null;
 
@@ -996,7 +994,7 @@ class RedisCacheService
 
     public function mGet(array $keys): array
     {
-        $keys = array_values(array_filter(array_map('strval', $keys), static fn($k) => $k !== ''));
+        $keys = array_values(array_filter(array_map(strval(...), $keys), static fn($k) => $k !== ''));
         if ($keys === []) {
             return [];
         }

@@ -46,7 +46,7 @@ class VariantsCacheInvalidator implements ExtensionInterface
 
     private function bumpByVariantIds(array $variantIds): void
     {
-        $variantIds = array_values(array_filter(array_map('intval', $variantIds)));
+        $variantIds = array_values(array_filter(array_map(intval(...), $variantIds)));
         if (empty($variantIds)) {
             return;
         }
