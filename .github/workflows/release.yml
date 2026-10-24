@@ -38,9 +38,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Модулі вимагають PHP 8.4+ (як composer.json форку): 8.4 стереже нижню
-        # межу від синтаксису 8.5, 8.5 — версія, на якій стоять сток 4.5.3 і форк.
-        php: ['8.4', '8.5']
+        # Модулі вимагають PHP 8.5+ — версії, на якій стоять сток 4.5.3 і форк і
+        # на якій модуль перевіряють.
+        php: ['8.5']
     steps:
       - uses: actions/checkout@v4
 
@@ -52,8 +52,12 @@ jobs:
       - run: |
           set -euo pipefail
           # tests/ не лінтуються: в архів вони не їдуть і написані під PHP 8.
+          # Будь-який рядок, крім «No syntax errors», — помилка: php -l повертає 0
+          # і на Deprecated, а PHPStan у модулів немає.
           find . -path ./.git -prune -o -path ./tests -prune -o -name '*.php' -print0 \
-            | xargs -0 -r -n1 -P4 php -l
+            | xargs -0 -r -n1 -P4 php -d error_reporting=-1 -d display_errors=1 -d log_errors=0 -l 2>&1 \
+            | { grep -v '^No syntax errors detected in ' || true; } | tee lint.txt
+          test ! -s lint.txt
 
   verify:
     name: ${{ matrix.target }} (PHP ${{ matrix.php }})
@@ -249,7 +253,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        php: ['8.4', '8.5']
+        php: ['8.5']
     steps:
       - uses: actions/checkout@v4
         with:
@@ -263,8 +267,12 @@ jobs:
       - run: |
           set -euo pipefail
           # tests/ не лінтуються: в архів вони не їдуть і написані під PHP 8.
+          # Будь-який рядок, крім «No syntax errors», — помилка: php -l повертає 0
+          # і на Deprecated, а PHPStan у модулів немає.
           find . -path ./.git -prune -o -path ./tests -prune -o -name '*.php' -print0 \
-            | xargs -0 -r -n1 -P4 php -l
+            | xargs -0 -r -n1 -P4 php -d error_reporting=-1 -d display_errors=1 -d log_errors=0 -l 2>&1 \
+            | { grep -v '^No syntax errors detected in ' || true; } | tee lint.txt
+          test ! -s lint.txt
 
   # Той самий набір перевірок, що й для базового релізу, але на гілці fork.
   # Без цього job'а рушій-специфічний код — єдиний, де різниця рушіїв взагалі
