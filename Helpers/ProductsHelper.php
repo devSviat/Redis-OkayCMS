@@ -111,7 +111,7 @@ class ProductsHelper extends \Okay\Helpers\ProductsHelper
         if (empty($products) || !$this->redisCache->isEnabled()) {
             return parent::attachImages($products);
         }
-        $productIds = array_map('intval', array_keys($products));
+        $productIds = array_map(intval(...), array_keys($products));
         sort($productIds);
         if (count($productIds) > 20) {
             return parent::attachImages($products);
@@ -165,7 +165,7 @@ class ProductsHelper extends \Okay\Helpers\ProductsHelper
         if (count($imageIds) > 50 || count($products) > 50) {
             return parent::attachMainImages($products);
         }
-        $tags = $this->imageCacheTags(array_map('intval', array_keys($products)));
+        $tags = $this->imageCacheTags(array_map(intval(...), array_keys($products)));
         $key = $this->redisCache->makeVersionedKey('products_attach_main_images', $tags, [$imageIds]);
         $cached = $this->redisCache->get($key);
 
@@ -253,7 +253,7 @@ class ProductsHelper extends \Okay\Helpers\ProductsHelper
         // Сортуємо: понад чотири теги вектор версій згортається в md5, тож
         // порядок став би значущим і той самий набір товарів під різним
         // сортуванням лістингу давав би різні ключі.
-        $productIds = array_values(array_unique(array_map('intval', $productIds)));
+        $productIds = array_values(array_unique(array_map(intval(...), $productIds)));
         sort($productIds);
 
         $tags = [CacheTags::PRODUCTS_ALL];
