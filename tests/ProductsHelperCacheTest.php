@@ -39,20 +39,20 @@ class ProductsHelperCacheTest extends TestCase
     {
         $stub = new StubRedisCacheService();
         $stub->cachedValue = [
-            7 => (object) ['id' => 7, 'url' => 'delonghi-as00009450', 'slug_url' => 'coffee-machines/delonghi-as00009450'],
-            9 => (object) ['id' => 9, 'url' => 'krups-ms-624571',     'slug_url' => 'coffee-machines/krups-ms-624571'],
+            7 => (object) ['id' => 7, 'url' => 'product-alpha-100', 'slug_url' => 'gadgets/product-alpha-100'],
+            9 => (object) ['id' => 9, 'url' => 'product-beta-200',  'slug_url' => 'gadgets/product-beta-200'],
         ];
 
         $result = $this->makeHelper($stub)->getList(['category_id' => 18]);
 
         $this->assertSame($stub->cachedValue, $result);
         $this->assertSame(
-            'coffee-machines/delonghi-as00009450',
-            ProductRoute::getUrlSlugAlias('delonghi-as00009450')
+            'gadgets/product-alpha-100',
+            ProductRoute::getUrlSlugAlias('product-alpha-100')
         );
         $this->assertSame(
-            'coffee-machines/krups-ms-624571',
-            ProductRoute::getUrlSlugAlias('krups-ms-624571')
+            'gadgets/product-beta-200',
+            ProductRoute::getUrlSlugAlias('product-beta-200')
         );
     }
 
