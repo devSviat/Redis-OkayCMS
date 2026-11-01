@@ -9,6 +9,13 @@ class RedisCacheService
 {
     private const string VERSION_KEY_PREFIX = 'helpers:ver:';
 
+    /**
+     * Позначка підписаного значення. Значення йдуть у ціну й HTML вітрини, тож
+     * доступ на запис до Redis не має ставати можливістю їх підмінити.
+     */
+    private const string SIGNATURE_MARK = 'sig1:';
+    private const int SIGNATURE_LENGTH = 64;
+
     private Settings $settings;
     private ?Config $config;
     private $client = null;
@@ -79,6 +86,8 @@ class RedisCacheService
     private bool $breakerSuppressed = false;
     private bool $replayingBumps = false;
     private bool $stateDirResolved = false;
+    private bool $signingKeyResolved = false;
+    private ?string $signingKeyMemo = null;
     private ?string $stateDirMemo = null;
 
     private int $statHits = 0;
@@ -1083,7 +1092,7 @@ class RedisCacheService
                 $this->statMisses++;
                 return null;
             }
-            $value = $this->safeUnserialize((string) $data);
+            $value = $this->decode((string) $data);
             if ($value === null) {
                 $this->getMemo[$key] = [false, null];
                 $this->statMisses++;
@@ -1144,7 +1153,7 @@ class RedisCacheService
                     $this->statMisses++;
                     continue;
                 }
-                $value = $this->safeUnserialize((string) $data);
+                $value = $this->decode((string) $data);
                 if ($value === null) {
                     $this->getMemo[$k] = [false, null];
                     $result[$k] = null;
@@ -1165,6 +1174,62 @@ class RedisCacheService
             }
         }
         return $result;
+    }
+
+    /** Ключ ніколи не лежить у Redis: env, конфіг або похідний від доступу до БД. */
+    private function signingKey(): ?string
+    {
+        if ($this->signingKeyResolved) {
+            return $this->signingKeyMemo;
+        }
+        $this->signingKeyResolved = true;
+
+        $explicit = self::env('REDIS_SIGNING_KEY') ?? $this->configValue('SIGNING_KEY');
+        if ($explicit !== null) {
+            return $this->signingKeyMemo = $explicit;
+        }
+        if ($this->config === null) {
+            return null;
+        }
+
+        // Спільне для php-fpm і планувальника, на відміну від salt, що залежить від stat() файлу.
+        return $this->signingKeyMemo = hash('sha256', implode('|', [
+            'sviat-redis-cache',
+            (string) $this->config->get('db_server'),
+            (string) $this->config->get('db_user'),
+            (string) $this->config->get('db_password'),
+            (string) $this->config->get('db_name'),
+        ]));
+    }
+
+    private function seal(string $data): string
+    {
+        $key = $this->signingKey();
+
+        return $key === null ? $data : self::SIGNATURE_MARK . hash_hmac('sha256', $data, $key) . $data;
+    }
+
+    /** @return mixed значення або null, якщо підпису немає чи він не збігся */
+    private function decode(string $raw)
+    {
+        $key = $this->signingKey();
+        if ($key === null) {
+            return $this->safeUnserialize($raw);
+        }
+
+        $markLength = strlen(self::SIGNATURE_MARK);
+        if (strncmp($raw, self::SIGNATURE_MARK, $markLength) !== 0) {
+            return null;
+        }
+        $signature = substr($raw, $markLength, self::SIGNATURE_LENGTH);
+        $data = substr($raw, $markLength + self::SIGNATURE_LENGTH);
+        if (!hash_equals(hash_hmac('sha256', $data, $key), $signature)) {
+            $this->lastError = 'Cache signature mismatch';
+
+            return null;
+        }
+
+        return $this->safeUnserialize($data);
     }
 
     private function safeUnserialize(string $data)
@@ -1196,7 +1261,7 @@ class RedisCacheService
             $ttl = max(self::MIN_TTL, (int) $config['ttl']);
         }
         try {
-            $data = serialize($value);
+            $data = $this->seal(serialize($value));
             $started = microtime(true);
             $client->setex($key, $ttl, $data);
             $this->statSeconds += microtime(true) - $started;

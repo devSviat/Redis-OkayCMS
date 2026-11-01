@@ -2,6 +2,7 @@
 
 namespace Modules\Sviat\Redis;
 
+use Okay\Core\Config;
 use Okay\Core\Settings;
 use Okay\Modules\Sviat\Redis\Services\RedisCacheService;
 use PHPUnit\Framework\TestCase;
@@ -140,6 +141,22 @@ class RealServerContractTest extends TestCase
         ($service->deferred[0])();
 
         self::assertSame('токен-іншого-воркера', $this->raw->get($lock));
+    }
+
+    public function testWriterWithoutTheKeyCannotChangeCachedValue(): void
+    {
+        $settings = $this->createStub(Settings::class);
+        $settings->method('get')->willReturnCallback(fn (string $k) => $k === 'sviat__redis__default_ttl' ? 600 : null);
+        $config = $this->createStub(Config::class);
+        $config->method('get')->willReturnCallback(fn (string $k) => $k === 'db_password' ? 'secret' : null);
+        putenv('REDIS_PREFIX=okay:');
+
+        new RedisCacheService($settings, $config)->set('helpers:price', ['rate' => 40]);
+        self::assertSame(['rate' => 40], new RedisCacheService($settings, $config)->get('helpers:price'));
+
+        $this->raw->set('okay:helpers:price', serialize(['rate' => 1]));
+
+        self::assertNull(new RedisCacheService($settings, $config)->get('helpers:price'));
     }
 
     private function expireAllEnvelopes(): void
