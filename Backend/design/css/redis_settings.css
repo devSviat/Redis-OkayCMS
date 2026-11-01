@@ -1,0 +1,174 @@
+/* На стоку немає токенів --ok-*, тому кожен var() має запасне значення. */
+.sviat_redis_status {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 16px 24px;
+}
+
+.sviat_redis_status__state {
+    display: flex;
+    flex: 1 1 280px;
+    align-items: center;
+    gap: 14px;
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.sviat_redis_status__text {
+    min-width: 0;
+    color: var(--ok-ink-soft, #545b62);
+}
+
+.sviat_redis_status__title {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--ok-ink, #23272b);
+}
+
+.sviat_redis_status__icon {
+    flex: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    height: 44px;
+    border-radius: 12px;
+    color: var(--ok-ink-muted, #676e75);
+    background: rgba(103, 110, 117, .12);
+}
+
+.sviat_redis_status__icon svg {
+    width: 24px;
+    height: 24px;
+}
+
+.sviat_redis_status--ok .sviat_redis_status__icon {
+    color: var(--ok-success, #227d3a);
+    background: rgba(34, 125, 58, .12);
+}
+
+.sviat_redis_status--error .sviat_redis_status__icon {
+    color: var(--ok-danger, #c8352c);
+    background: rgba(200, 53, 44, .12);
+}
+
+.sviat_redis_status__metric {
+    padding-left: 24px;
+    border-left: 1px solid var(--ok-line, #e4e6e9);
+}
+
+.sviat_redis_status__metric span {
+    display: block;
+    font-size: 13px;
+    color: var(--ok-ink-soft, #545b62);
+}
+
+.sviat_redis_status__metric strong {
+    font-size: 18px;
+}
+
+.sviat_redis_status__action {
+    margin: 0;
+}
+
+.sviat_redis_server {
+    display: grid;
+    grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr);
+    gap: 0 12px;
+}
+
+@media (max-width: 480px) {
+    .sviat_redis_server {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .sviat_redis_status__metric {
+        padding-left: 0;
+        border-left: 0;
+    }
+}
+
+.sviat_redis_connection {
+    max-width: 620px;
+}
+
+.sviat_redis_guide {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0 32px;
+}
+
+@media (max-width: 1100px) {
+    .sviat_redis_guide {
+        grid-template-columns: minmax(0, 1fr);
+    }
+}
+
+.sviat_redis_ttl_title {
+    margin: 4px 0 8px;
+    font-size: 16px;
+    font-weight: 600;
+}
+
+.sviat_redis_guide ol {
+    padding-left: 20px;
+}
+
+.sviat_redis_guide pre {
+    margin: 8px 0;
+    padding: 10px 12px;
+    border-radius: 8px;
+    white-space: pre-wrap;
+    background: rgba(103, 110, 117, .1);
+}
+
+.sviat_redis_ttl_default {
+    max-width: 180px;
+}
+
+.sviat_redis_ttl_grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0 32px;
+}
+
+@media (max-width: 1100px) {
+    .sviat_redis_ttl_grid {
+        grid-template-columns: minmax(0, 1fr);
+    }
+}
+
+.sviat_redis_ttl_group {
+    margin-top: 12px;
+    font-weight: 600;
+}
+
+.sviat_redis_ttl {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 6px 0;
+    border-bottom: 1px solid var(--ok-line, #e4e6e9);
+}
+
+.sviat_redis_ttl label {
+    min-width: 0;
+    margin: 0;
+    overflow-wrap: anywhere;
+}
+
+.sviat_redis_ttl .form-control {
+    flex: none;
+    width: 90px;
+}
+
+.sviat_redis_actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 20px;
+    padding-top: 16px;
+    border-top: 1px solid var(--ok-line, #e4e6e9);
+}

@@ -159,6 +159,16 @@ class SettingsPasswordTest extends TestCase
         self::assertSame([403], $statuses);
     }
 
+    /** Форма очищення не несе полів налаштувань: збереження вимкнуло б кеш і скинуло TTL. */
+    public function testFlushChangesNoSettings(): void
+    {
+        [$saved] = $this->submit(['action' => 'flush_helpers'], 'секрет');
+
+        self::assertSame('секрет', $saved['sviat__redis__password']);
+        self::assertArrayNotHasKey('sviat__redis__enabled', $saved);
+        self::assertArrayNotHasKey('sviat__redis__default_ttl', $saved);
+    }
+
     public function testPostWithoutKnownActionWritesNothing(): void
     {
         [$saved] = $this->submit(['password' => 'новий'], 'секрет');
