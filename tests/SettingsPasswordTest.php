@@ -90,6 +90,35 @@ class SettingsPasswordTest extends TestCase
         self::assertSame('', $saved['sviat__redis__password']);
     }
 
+    public function testTypedPasswordWinsOverClearCheckbox(): void
+    {
+        [$saved] = $this->submit(['action' => 'save', 'password' => 'новий', 'clear_password' => '1'], 'секрет');
+
+        self::assertSame('новий', $saved['sviat__redis__password'], 'введений пароль не сміє мовчки зникнути');
+    }
+
+    public function testPlaceholderDependsOnWhetherPasswordIsStored(): void
+    {
+        $template = (string) file_get_contents(self::TEMPLATE);
+
+        self::assertMatchesRegularExpression(
+            '/placeholder="\\{if \\$redis_password_is_set\\}\\{\\$btr->sviat_redis_password_placeholder\\|escape\\}\\{else\\}\\{\\$btr->sviat_redis_password_placeholder_empty\\|escape\\}\\{\\/if\\}"/',
+            $template
+        );
+    }
+
+    public function testPasswordKeysExistInEveryLanguage(): void
+    {
+        foreach (['ua', 'en', 'ru'] as $language) {
+            $lang = [];
+            require __DIR__ . "/../../../../Okay/Modules/Sviat/Redis/Backend/lang/$language.php";
+
+            foreach (['sviat_redis_password_placeholder', 'sviat_redis_password_placeholder_empty', 'sviat_redis_clear_password'] as $key) {
+                self::assertNotEmpty($lang[$key] ?? null, "$language: $key");
+            }
+        }
+    }
+
     public function testStoredPasswordNeverReachesTemplate(): void
     {
         [, $assigned] = $this->submit(['action' => 'save', 'password' => ''], 'секрет');

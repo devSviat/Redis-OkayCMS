@@ -90,7 +90,7 @@
 
                 <div class="form-group">
                     <label class="heading_label">{$btr->sviat_redis_password|escape}</label>
-                    <input type="password" class="form-control" name="password" value="" placeholder="{$btr->sviat_redis_password_placeholder|escape}" autocomplete="new-password">
+                    <input type="password" class="form-control" name="password" value="" placeholder="{if $redis_password_is_set}{$btr->sviat_redis_password_placeholder|escape}{else}{$btr->sviat_redis_password_placeholder_empty|escape}{/if}" autocomplete="new-password">
                     {if $redis_password_is_set}
                         <label class="form-check-label" style="display:block; margin-top:8px;">
                             <input type="checkbox" name="clear_password" value="1">

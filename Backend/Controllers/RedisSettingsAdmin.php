@@ -20,13 +20,11 @@ class RedisSettingsAdmin extends IndexAdmin
             $this->settings->set('sviat__redis__db', (int)$this->request->post('db'));
             $this->settings->set('sviat__redis__username', trim((string) $this->request->post('username')));
             // Пароль не виводиться в HTML, тому порожнє поле означає «без змін».
-            if ((int) $this->request->post('clear_password') === 1) {
+            $newPassword = (string) ($this->request->post('password') ?? '');
+            if ($newPassword !== '') {
+                $this->settings->set('sviat__redis__password', $newPassword);
+            } elseif ((int) $this->request->post('clear_password') === 1) {
                 $this->settings->set('sviat__redis__password', '');
-            } else {
-                $newPassword = (string) ($this->request->post('password') ?? '');
-                if ($newPassword !== '') {
-                    $this->settings->set('sviat__redis__password', $newPassword);
-                }
             }
             $this->settings->set('sviat__redis__prefix', $this->request->post('prefix'));
             $this->settings->set('sviat__redis__default_ttl', (int)$this->request->post('default_ttl'));

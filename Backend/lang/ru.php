@@ -14,6 +14,7 @@ $lang['sviat_redis_username_placeholder'] = 'ACL (Redis 6+), пусто = тол
 $lang['sviat_redis_password'] = 'Password';
 $lang['sviat_redis_clear_password'] = 'Удалить сохранённый пароль';
 $lang['sviat_redis_password_placeholder'] = 'Оставьте пустым, чтобы сохранить текущий';
+$lang['sviat_redis_password_placeholder_empty'] = 'Пусто = без авторизации';
 $lang['sviat_redis_key_prefix'] = 'Префикс ключей';
 $lang['sviat_redis_default_ttl'] = 'TTL по умолчанию (сек)';
 $lang['sviat_redis_test_connection'] = 'Проверить подключение';

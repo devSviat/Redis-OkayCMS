@@ -14,6 +14,7 @@ $lang['sviat_redis_username_placeholder'] = 'ACL (Redis 6+), empty = password on
 $lang['sviat_redis_password'] = 'Password';
 $lang['sviat_redis_clear_password'] = 'Remove stored password';
 $lang['sviat_redis_password_placeholder'] = 'Leave blank to keep the current password';
+$lang['sviat_redis_password_placeholder_empty'] = 'Empty = no authentication';
 $lang['sviat_redis_key_prefix'] = 'Key prefix';
 $lang['sviat_redis_default_ttl'] = 'Default TTL (sec)';
 $lang['sviat_redis_test_connection'] = 'Test connection';

@@ -22,7 +22,9 @@ class StubRedisCacheService extends RedisCacheService
         // Skip parent constructor — we only record bumps.
     }
 
-    public function isEnabled(): bool { return true; }
+    public bool $enabled = true;
+
+    public function isEnabled(): bool { return $this->enabled; }
 
     public function bump(string $tag): void
     {
@@ -44,6 +46,7 @@ class StubRedisCacheService extends RedisCacheService
 
     public function get(string $key)
     {
+        $this->lastKey = $key;
         return $this->cachedValue;
     }
 
@@ -52,9 +55,15 @@ class StubRedisCacheService extends RedisCacheService
         $this->stored[$key] = [$value, $ttl];
     }
 
+    /** @var array<string, int> helperKey => TTL з налаштувань */
+    public array $helperTtls = [];
+
+    /** Ключ, за яким востаннє читали кеш. */
+    public ?string $lastKey = null;
+
     public function getHelperTtl(string $helperKey): ?int
     {
-        return null;
+        return $this->helperTtls[$helperKey] ?? null;
     }
 
     /**
