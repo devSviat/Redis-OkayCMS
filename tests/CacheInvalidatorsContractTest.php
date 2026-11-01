@@ -33,7 +33,7 @@ class CacheInvalidatorsContractTest extends TestCase
             [BrandCacheInvalidator::class, 'onBrand', [CacheTags::BRANDS, CacheTags::PRODUCTS_LIST]],
             [BlogCacheInvalidator::class, 'onBlog', [CacheTags::AUTHORS_BLOG]],
             [AuthorCacheInvalidator::class, 'onAuthor', [CacheTags::AUTHORS_BLOG]],
-            [CurrencyCacheInvalidator::class, 'onCurrency', [CacheTags::MONEY, CacheTags::PRODUCTS_ALL]],
+            [CurrencyCacheInvalidator::class, 'onCurrency', [CacheTags::PRODUCTS_ALL]],
             [FeaturesCacheInvalidator::class, 'onFeature', self::ALL_AND_LIST],
             [FeaturesValuesCacheInvalidator::class, 'onFeatureValue', self::ALL_AND_LIST],
             [SpecialImagesCacheInvalidator::class, 'onSpecialImage', [CacheTags::PRODUCTS_ALL]],

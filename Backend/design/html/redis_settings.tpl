@@ -9,13 +9,27 @@
 </div>
 
 {* Алерти: збережено / результат тесту підключення *}
-{if $message_success || $test_result === true || $test_result === false || $flush_error !== null}
+{if $message_success || $test_result === true || $test_result === false || $flush_error !== null || $redis_form_errors || $redis_password_dropped}
     <div class="row">
         <div class="col-lg-12">
             {if $message_success}
                 <div class="alert alert--success">
                     <div class="alert__content">
                         <div class="alert__title">{$btr->general_settings_saved|default:"Налаштування збережено"|escape}</div>
+                    </div>
+                </div>
+            {/if}
+            {if $redis_form_errors}
+                <div class="alert alert--warning">
+                    <div class="alert__content">
+                        <div class="alert__title">{$btr->sviat_redis_form_invalid|escape}</div>
+                    </div>
+                </div>
+            {/if}
+            {if $redis_password_dropped}
+                <div class="alert alert--warning">
+                    <div class="alert__content">
+                        <div class="alert__title">{$btr->sviat_redis_password_dropped|escape}</div>
                     </div>
                 </div>
             {/if}
@@ -53,13 +67,21 @@
             <div class="boxed">
                 <div class="heading_box">{$btr->sviat_redis_connection_box|escape}</div>
 
+                {if $redis_locked}
+                    <div class="alert alert--info">
+                        <div class="alert__content">
+                            <div class="alert__text">{$btr->sviat_redis_locked_hint|escape}</div>
+                        </div>
+                    </div>
+                {/if}
+
                 <div class="form-group">
                     <div class="activity_of_switch activity_of_switch--left">
                         <div class="activity_of_switch_item">
                             <div class="okay_switch clearfix">
                                 <label class="switch_label">{$btr->sviat_redis_enable_cache|escape}</label>
                                 <label class="switch switch-default">
-                                    <input class="switch-input" name="enabled" value="1" type="checkbox" id="sviat_redis_enabled" {if $redis_enabled}checked{/if}>
+                                    <input class="switch-input" name="enabled" value="1" type="checkbox"{if $redis_locked.enabled} disabled{/if} id="sviat_redis_enabled" {if $redis_enabled}checked{/if}>
                                     <span class="switch-label"></span>
                                     <span class="switch-handle"></span>
                                 </label>
@@ -70,24 +92,25 @@
 
                 <div class="form-group">
                     <label class="heading_label">{$btr->sviat_redis_host|escape}</label>
-                    <input type="text" class="form-control" name="host" value="{$redis_host|escape}">
+                    <input type="text" class="form-control" name="host" value="{$redis_host|escape}"{if $redis_locked.host} readonly{/if}>
                 </div>
 
                 <div class="form-group">
                     <label class="heading_label">{$btr->sviat_redis_port|escape}</label>
-                    <input type="number" class="form-control" name="port" value="{$redis_port|escape}">
+                    <input type="number" class="form-control" name="port" value="{$redis_port|escape}"{if $redis_locked.port} readonly{/if}>
                 </div>
 
                 <div class="form-group">
                     <label class="heading_label">{$btr->sviat_redis_db|escape}</label>
-                    <input type="number" class="form-control" name="db" value="{$redis_db|escape}">
+                    <input type="number" class="form-control" name="db" value="{$redis_db|escape}"{if $redis_locked.db} readonly{/if}>
                 </div>
 
                 <div class="form-group">
                     <label class="heading_label">{$btr->sviat_redis_username|escape}</label>
-                    <input type="text" class="form-control" name="username" value="{$redis_username|escape}" placeholder="{$btr->sviat_redis_username_placeholder|escape}" autocomplete="off">
+                    <input type="text" class="form-control" name="username" value="{$redis_username|escape}"{if $redis_locked.username} readonly{/if} placeholder="{$btr->sviat_redis_username_placeholder|escape}" autocomplete="off">
                 </div>
 
+                {if !$redis_locked.password}
                 <div class="form-group">
                     <label class="heading_label">{$btr->sviat_redis_password|escape}</label>
                     <input type="password" class="form-control" name="password" value="" placeholder="{if $redis_password_is_set}{$btr->sviat_redis_password_placeholder|escape}{else}{$btr->sviat_redis_password_placeholder_empty|escape}{/if}" autocomplete="new-password">
@@ -98,10 +121,11 @@
                         </label>
                     {/if}
                 </div>
+                {/if}
 
                 <div class="form-group">
                     <label class="heading_label">{$btr->sviat_redis_key_prefix|escape}</label>
-                    <input type="text" class="form-control" name="prefix" value="{$redis_prefix|escape}">
+                    <input type="text" class="form-control" name="prefix" value="{$redis_prefix|escape}"{if $redis_locked.prefix} readonly{/if}>
                 </div>
 
                 <div class="form-group">
@@ -195,12 +219,6 @@
                         <div class="form-group">
                             <label class="heading_label"><small>CategoriesHelper<span class="text_grey">:getCatalogFeatures</span></small></label>
                             <input type="number" class="form-control" name="ttl_categories_catalog_features" value="{$ttl_categories_catalog_features|escape}">
-                        </div>
-                    </div>
-                    <div class="col-lg-3 col-md-4 col-sm-6">
-                        <div class="form-group">
-                            <label class="heading_label"><small>MoneyHelper<span class="text_grey">:currencies</span></small></label>
-                            <input type="number" class="form-control" name="ttl_money_currencies_list" value="{$ttl_money_currencies_list|escape}">
                         </div>
                     </div>
                     <div class="col-lg-3 col-md-4 col-sm-6">

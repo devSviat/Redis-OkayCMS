@@ -10,7 +10,6 @@ final class CacheTags
     public const string CATEGORIES      = 'cver:global';
     public const string BRANDS          = 'bver:global';
     public const string AUTHORS_BLOG    = 'aver:global';
-    public const string MONEY           = 'mver:global';
 
     public static function product(int $productId): string
     {

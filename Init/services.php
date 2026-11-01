@@ -2,6 +2,7 @@
 
 namespace Okay\Modules\Sviat\Redis\Init;
 
+use Okay\Core\Config;
 use Okay\Core\Design;
 use Okay\Core\EntityFactory;
 use Okay\Core\FrontTranslations;
@@ -32,6 +33,7 @@ use Okay\Modules\Sviat\Redis\Extenders\FeaturesCacheInvalidator;
 use Okay\Modules\Sviat\Redis\Extenders\FeaturesValuesCacheInvalidator;
 use Okay\Modules\Sviat\Redis\Extenders\ImagesCacheInvalidator;
 use Okay\Modules\Sviat\Redis\Extenders\ProductCacheInvalidator;
+use Okay\Modules\Sviat\Redis\Extenders\ProductRouteWarmer;
 use Okay\Modules\Sviat\Redis\Extenders\SpecialImagesCacheInvalidator;
 use Okay\Modules\Sviat\Redis\Extenders\VariantsCacheInvalidator;
 use Okay\Modules\Sviat\Redis\Helpers\AuthorsHelper;
@@ -40,7 +42,6 @@ use Okay\Modules\Sviat\Redis\Helpers\BrandsHelper;
 use Okay\Modules\Sviat\Redis\Helpers\CatalogHelper;
 use Okay\Modules\Sviat\Redis\Helpers\CategoriesHelper;
 use Okay\Modules\Sviat\Redis\Helpers\FilterHelper;
-use Okay\Modules\Sviat\Redis\Helpers\MoneyHelper as RedisMoneyHelper;
 use Okay\Modules\Sviat\Redis\Helpers\ProductsHelper;
 use Okay\Modules\Sviat\Redis\Helpers\RelatedProductsHelper;
 use Okay\Modules\Sviat\Redis\Services\RedisCacheService;
@@ -48,7 +49,12 @@ use Okay\Modules\Sviat\Redis\Services\RedisCacheService;
 return [
     RedisCacheService::class => [
         'class' => RedisCacheService::class,
-        'arguments' => [new SR(Settings::class)],
+        'arguments' => [new SR(Settings::class), new SR(Config::class)],
+    ],
+
+    ProductRouteWarmer::class => [
+        'class' => ProductRouteWarmer::class,
+        'arguments' => [new SR(Router::class), new SR(EntityFactory::class)],
     ],
 
     CoreProductsHelper::class => [
@@ -137,15 +143,6 @@ return [
         'class' => RelatedProductsHelper::class,
         'arguments' => [
             new SR(CoreProductsHelper::class),
-            new SR(RedisCacheService::class),
-        ],
-    ],
-
-    MoneyHelper::class => [
-        'class' => RedisMoneyHelper::class,
-        'arguments' => [
-            new SR(EntityFactory::class),
-            new SR(Settings::class),
             new SR(RedisCacheService::class),
         ],
     ],

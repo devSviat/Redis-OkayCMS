@@ -3,30 +3,61 @@
 namespace Okay\Modules\Sviat\Redis\Backend\Controllers;
 
 use Okay\Admin\Controllers\IndexAdmin;
+use Okay\Modules\Sviat\Redis\Security\RequestOrigin;
 use Okay\Modules\Sviat\Redis\Services\RedisCacheService;
+use Okay\Modules\Sviat\Redis\Services\RedisConnectionForm;
 
 class RedisSettingsAdmin extends IndexAdmin
 {
+    /** Інші POST сторінки (вихід з адмінки) приходять сюди порожніми й не мають зачепити налаштування. */
+    private const array ACTIONS = ['save', 'test', 'flush_helpers'];
+
     public function fetch(RedisCacheService $redisCache)
     {
         $testResult = null;
         $error = null;
         $flushError = null;
+        $formErrors = [];
+        $passwordDropped = false;
 
-        if ($this->request->method('post')) {
-            $this->settings->set('sviat__redis__enabled', (int)$this->request->post('enabled'));
-            $this->settings->set('sviat__redis__host', $this->request->post('host'));
-            $this->settings->set('sviat__redis__port', (int)$this->request->post('port'));
-            $this->settings->set('sviat__redis__db', (int)$this->request->post('db'));
-            $this->settings->set('sviat__redis__username', trim((string) $this->request->post('username')));
-            // Пароль не виводиться в HTML, тому порожнє поле означає «без змін».
-            $newPassword = (string) ($this->request->post('password') ?? '');
-            if ($newPassword !== '') {
-                $this->settings->set('sviat__redis__password', $newPassword);
-            } elseif ((int) $this->request->post('clear_password') === 1) {
-                $this->settings->set('sviat__redis__password', '');
+        $locked = $redisCache->lockedConnectionFields();
+
+        if ($this->request->method('post') && in_array($this->request->post('action'), self::ACTIONS, true)) {
+            if (!$this->isFromThisSite()) {
+                $this->response->setStatusCode(403);
+                $this->response->setContent(json_encode(['message' => 'Forbidden']), RESPONSE_JSON);
+
+                return;
             }
-            $this->settings->set('sviat__redis__prefix', $this->request->post('prefix'));
+
+            if (!isset($locked['enabled'])) {
+                $this->settings->set('sviat__redis__enabled', (int) $this->request->post('enabled'));
+            }
+
+            $connection = RedisConnectionForm::apply(
+                [
+                    'host'           => $this->request->post('host'),
+                    'port'           => $this->request->post('port'),
+                    'db'             => $this->request->post('db'),
+                    'username'       => $this->request->post('username'),
+                    'password'       => $this->request->post('password'),
+                    'clear_password' => $this->request->post('clear_password'),
+                    'prefix'         => $this->request->post('prefix'),
+                ],
+                [
+                    'host'     => (string) ($this->settings->get('sviat__redis__host') ?: '127.0.0.1'),
+                    'port'     => (string) ($this->settings->get('sviat__redis__port') ?: 6379),
+                    'username' => (string) ($this->settings->get('sviat__redis__username') ?? ''),
+                    'password' => (string) ($this->settings->get('sviat__redis__password') ?? ''),
+                ],
+                $locked
+            );
+            foreach ($connection['values'] as $field => $value) {
+                $this->settings->set('sviat__redis__' . $field, $value);
+            }
+            $formErrors = $connection['errors'];
+            $passwordDropped = $connection['passwordDropped'];
+
             $this->settings->set('sviat__redis__default_ttl', (int)$this->request->post('default_ttl'));
 
             $this->settings->set('sviat__redis__ttl__products_get_list', (int)$this->request->post('ttl_products_get_list'));
@@ -36,7 +67,6 @@ class RedisSettingsAdmin extends IndexAdmin
             $this->settings->set('sviat__redis__ttl__product_attach_variants', (int)$this->request->post('ttl_product_attach_variants'));
             $this->settings->set('sviat__redis__ttl__product_attach_images', (int)$this->request->post('ttl_product_attach_images'));
             $this->settings->set('sviat__redis__ttl__product_attach_features', (int)$this->request->post('ttl_product_attach_features'));
-            $this->settings->set('sviat__redis__ttl__money_currencies_list', (int)$this->request->post('ttl_money_currencies_list'));
             $this->settings->set('sviat__redis__ttl__brands_get_list', (int)$this->request->post('ttl_brands_get_list'));
             $this->settings->set('sviat__redis__ttl__filter_get_brands', (int)$this->request->post('ttl_filter_get_brands'));
             $this->settings->set('sviat__redis__ttl__authors_get_list', (int)$this->request->post('ttl_authors_get_list'));
@@ -63,13 +93,17 @@ class RedisSettingsAdmin extends IndexAdmin
 
         $stats = $redisCache->getStats();
 
-        $this->design->assign('redis_enabled', (int)$this->settings->get('sviat__redis__enabled'));
-        $this->design->assign('redis_host', $this->settings->get('sviat__redis__host') ?: '127.0.0.1');
-        $this->design->assign('redis_port', (int)($this->settings->get('sviat__redis__port') ?: 6379));
-        $this->design->assign('redis_db', (int)($this->settings->get('sviat__redis__db') ?: 0));
-        $this->design->assign('redis_username', (string) ($this->settings->get('sviat__redis__username') ?? ''));
+        $view = $redisCache->connectionView();
+        $this->design->assign('redis_locked', $locked);
+        $this->design->assign('redis_form_errors', $formErrors);
+        $this->design->assign('redis_password_dropped', $passwordDropped);
+        $this->design->assign('redis_enabled', (int) $view['enabled']);
+        $this->design->assign('redis_host', $view['host']);
+        $this->design->assign('redis_port', $view['port']);
+        $this->design->assign('redis_db', $view['db']);
+        $this->design->assign('redis_username', $view['username']);
         $this->design->assign('redis_password_is_set', (string) ($this->settings->get('sviat__redis__password') ?? '') !== '');
-        $this->design->assign('redis_prefix', $this->settings->get('sviat__redis__prefix') ?: 'okay:');
+        $this->design->assign('redis_prefix', $view['prefix']);
         $this->design->assign('redis_default_ttl', (int)($this->settings->get('sviat__redis__default_ttl') ?: 600));
 
         $this->design->assign('ttl_products_get_list', (int)($this->settings->get('sviat__redis__ttl__products_get_list') ?: 300));
@@ -79,7 +113,6 @@ class RedisSettingsAdmin extends IndexAdmin
         $this->design->assign('ttl_product_attach_variants', (int)($this->settings->get('sviat__redis__ttl__product_attach_variants') ?: 300));
         $this->design->assign('ttl_product_attach_images', (int)($this->settings->get('sviat__redis__ttl__product_attach_images') ?: 3600));
         $this->design->assign('ttl_product_attach_features', (int)($this->settings->get('sviat__redis__ttl__product_attach_features') ?: 3600));
-        $this->design->assign('ttl_money_currencies_list', (int)($this->settings->get('sviat__redis__ttl__money_currencies_list') ?: 3600));
         $this->design->assign('ttl_brands_get_list', (int)($this->settings->get('sviat__redis__ttl__brands_get_list') ?: 600));
         $this->design->assign('ttl_filter_get_brands', (int)($this->settings->get('sviat__redis__ttl__filter_get_brands') ?: 600));
         $this->design->assign('ttl_authors_get_list', (int)($this->settings->get('sviat__redis__ttl__authors_get_list') ?: 600));
@@ -93,5 +126,10 @@ class RedisSettingsAdmin extends IndexAdmin
 
         $this->response->setContent($this->design->fetch('redis_settings.tpl'));
     }
-}
 
+    /** На стоку CSRF-перевірка ядра стоїть після контролера, тому модуль перевіряє сам. */
+    protected function isFromThisSite(): bool
+    {
+        return RequestOrigin::isFromThisSite();
+    }
+}

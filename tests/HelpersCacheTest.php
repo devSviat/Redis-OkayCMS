@@ -4,11 +4,9 @@ namespace Modules\Sviat\Redis;
 
 use Okay\Core\Entity\RelatedProductsInterface;
 use Okay\Core\EntityFactory;
-use Okay\Core\Settings;
 use Okay\Modules\Sviat\Redis\Helpers\AuthorsHelper;
 use Okay\Modules\Sviat\Redis\Helpers\BlogHelper;
 use Okay\Modules\Sviat\Redis\Helpers\BrandsHelper;
-use Okay\Modules\Sviat\Redis\Helpers\MoneyHelper;
 use Okay\Modules\Sviat\Redis\Helpers\RelatedProductsHelper;
 use Okay\Modules\Sviat\Redis\Services\CacheTags;
 use PHPUnit\Framework\TestCase;
@@ -165,56 +163,5 @@ class HelpersCacheTest extends TestCase
         }
 
         self::assertCount(3, array_unique($keys));
-    }
-
-    private function money(StubRedisCacheService $redis, array $dbCurrencies): MoneyHelper
-    {
-        $settings = $this->createStub(Settings::class);
-
-        return $this->build(MoneyHelper::class, $redis, [
-            'entityFactory' => [MoneyHelper::class, $this->factoryReturning($dbCurrencies)],
-            'settings'      => [MoneyHelper::class, $settings],
-        ]);
-    }
-
-    private function usd(): array
-    {
-        return [2 => (object) ['id' => 2, 'rate_from' => 1, 'rate_to' => 40]];
-    }
-
-    private function variant(): object
-    {
-        return (object) ['price' => 10.0, 'compare_price' => null, 'currency_id' => 2];
-    }
-
-    public function testMoneyUsesCachedRatesWithoutDatabase(): void
-    {
-        $redis = new StubRedisCacheService();
-        $redis->cachedValue = $this->usd();
-
-        $result = $this->money($redis, [])->convertVariantPriceToMainCurrency($this->variant());
-
-        self::assertSame(400.0, $result->price);
-        self::assertStringStartsWith('money_currencies_list|' . CacheTags::MONEY . '|', (string) $redis->lastKey);
-    }
-
-    public function testMoneyMissLoadsRatesAndStoresThemForAnHourByDefault(): void
-    {
-        $redis = new StubRedisCacheService();
-
-        $result = $this->money($redis, $this->usd())->convertVariantPriceToMainCurrency($this->variant());
-
-        self::assertSame(400.0, $result->price);
-        self::assertSame(3600, array_values($redis->stored)[0][1]);
-    }
-
-    /** Порожній кеш курсів лишив би всі ціни неконвертованими до кінця TTL. */
-    public function testMoneyNeverCachesEmptyRates(): void
-    {
-        $redis = new StubRedisCacheService();
-
-        $this->money($redis, [])->convertVariantPriceToMainCurrency($this->variant());
-
-        self::assertSame([], $redis->stored);
     }
 }

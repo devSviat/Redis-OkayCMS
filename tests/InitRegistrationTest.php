@@ -47,6 +47,33 @@ class InitRegistrationTest extends TestCase
         }
     }
 
+    /** method_exists тут замало: хук на метод без ExtenderFacade просто ніколи не викликається. */
+    public function testEveryHookedMethodIsActuallyExtendable(): void
+    {
+        foreach ($this->registrations() as [$target, $targetMethod]) {
+            self::assertTrue($this->reachesExtender(new \ReflectionMethod($target, $targetMethod)), "$target::$targetMethod");
+        }
+    }
+
+    /** Сутності перевизначають update() і кличуть parent::, а ExtenderFacade лежить у базовому CRUD. */
+    private function reachesExtender(\ReflectionMethod $method): bool
+    {
+        $source = implode('', array_slice(
+            file((string) $method->getFileName()),
+            (int) $method->getStartLine() - 1,
+            (int) $method->getEndLine() - (int) $method->getStartLine() + 1
+        ));
+        if (str_contains($source, 'ExtenderFacade::execute')) {
+            return true;
+        }
+
+        $parent = $method->getDeclaringClass()->getParentClass();
+
+        return $parent !== false
+            && str_contains($source, 'parent::' . $method->getName())
+            && $this->reachesExtender($parent->getMethod($method->getName()));
+    }
+
     public function testEveryInvalidatorHandlerIsRegistered(): void
     {
         $registered = [];

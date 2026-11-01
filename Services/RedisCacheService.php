@@ -2,6 +2,7 @@
 
 namespace Okay\Modules\Sviat\Redis\Services;
 
+use Okay\Core\Config;
 use Okay\Core\Settings;
 
 class RedisCacheService
@@ -9,6 +10,7 @@ class RedisCacheService
     private const string VERSION_KEY_PREFIX = 'helpers:ver:';
 
     private Settings $settings;
+    private ?Config $config;
     private $client = null;
     private bool $initialized = false;
     private ?string $lastError = null;
@@ -87,34 +89,47 @@ class RedisCacheService
 
     private static ?bool $authSupportsTwoArgs = null;
 
-    public function __construct(Settings $settings)
+    /** Поля підключення і суфікси REDIS_*: у config.local.php це redis_host тощо. */
+    private const array CONNECTION_FIELDS = [
+        'enabled'  => 'ENABLED',
+        'host'     => 'HOST',
+        'port'     => 'PORT',
+        'db'       => 'DB',
+        'username' => 'USERNAME',
+        'password' => 'PASSWORD',
+        'prefix'   => 'PREFIX',
+    ];
+
+    public function __construct(Settings $settings, ?Config $config = null)
     {
         $this->settings = $settings;
+        $this->config = $config;
     }
 
     /**
-     * Env має пріоритет над налаштуваннями в БД: інакше зміна REDIS_PASSWORD
-     * у .env лишає сайт мовчки без кешу, поки хтось не відкриє адмінку.
+     * Пріоритет: env, потім config.local.php, потім налаштування в БД. Інакше
+     * зміна REDIS_PASSWORD у .env лишає сайт мовчки без кешу, поки хтось не
+     * відкриє адмінку.
      */
     private function loadConfig(): array
     {
-        $password = self::env('REDIS_PASSWORD')
+        $password = $this->fixedValue('PASSWORD')
             ?? trim((string) ($this->settings->get('sviat__redis__password') ?? ''));
-        $username = self::env('REDIS_USERNAME')
+        $username = $this->fixedValue('USERNAME')
             ?? trim((string) ($this->settings->get('sviat__redis__username') ?? ''));
 
-        $enabledEnv = self::env('REDIS_ENABLED');
+        $enabledEnv = $this->fixedValue('ENABLED');
 
         return [
             'enabled'  => $enabledEnv !== null
                 ? filter_var($enabledEnv, FILTER_VALIDATE_BOOLEAN)
                 : (bool) $this->settings->get('sviat__redis__enabled'),
-            'host'     => self::env('REDIS_HOST') ?: ($this->settings->get('sviat__redis__host') ?: '127.0.0.1'),
-            'port'     => (int) (self::env('REDIS_PORT') ?: ($this->settings->get('sviat__redis__port') ?: 6379)),
-            'db'       => (int) (self::env('REDIS_DB') ?? ($this->settings->get('sviat__redis__db') ?: 0)),
+            'host'     => $this->fixedValue('HOST') ?: ($this->settings->get('sviat__redis__host') ?: '127.0.0.1'),
+            'port'     => (int) ($this->fixedValue('PORT') ?: ($this->settings->get('sviat__redis__port') ?: 6379)),
+            'db'       => (int) ($this->fixedValue('DB') ?? ($this->settings->get('sviat__redis__db') ?: 0)),
             'username' => $username !== '' ? $username : null,
             'auth'     => $password !== '' ? $password : null,
-            'prefix'   => self::env('REDIS_PREFIX') ?: ($this->settings->get('sviat__redis__prefix') ?: 'okay:'),
+            'prefix'   => $this->fixedValue('PREFIX') ?: ($this->settings->get('sviat__redis__prefix') ?: 'okay:'),
             'ttl'      => (int) ($this->settings->get('sviat__redis__default_ttl') ?: 600),
         ];
     }
@@ -130,6 +145,68 @@ class RedisCacheService
         }
         $value = trim((string) $value);
         return $value !== '' ? $value : null;
+    }
+
+    /** Значення поза адмінкою: env або config.local.php. */
+    private function fixedValue(string $name): ?string
+    {
+        return self::env('REDIS_' . $name) ?? $this->configValue($name);
+    }
+
+    private function configValue(string $name): ?string
+    {
+        if ($this->config === null) {
+            return null;
+        }
+        $value = $this->config->get('redis_' . strtolower($name));
+        if ($value === null) {
+            return null;
+        }
+        $value = trim((string) $value);
+
+        return $value !== '' ? $value : null;
+    }
+
+    /**
+     * Поля, які адмінка не може змінити.
+     *
+     * Пароль поза адмінкою закриває і хост, порт та користувача: інакше менеджер
+     * скерував би цей пароль на свій сервер.
+     *
+     * @return array<string, string> поле => 'env' або 'config'
+     */
+    public function lockedConnectionFields(): array
+    {
+        $locked = [];
+        foreach (self::CONNECTION_FIELDS as $field => $name) {
+            if (self::env('REDIS_' . $name) !== null) {
+                $locked[$field] = 'env';
+            } elseif ($this->configValue($name) !== null) {
+                $locked[$field] = 'config';
+            }
+        }
+        if (isset($locked['password'])) {
+            foreach (['host', 'port', 'username'] as $field) {
+                $locked[$field] ??= $locked['password'];
+            }
+        }
+
+        return $locked;
+    }
+
+    /** @return array{enabled: bool, host: string, port: int, db: int, username: string, prefix: string} */
+    public function connectionView(): array
+    {
+        $config = $this->loadConfig();
+
+        return [
+            'enabled'  => (bool) $config['enabled'],
+            'host'     => (string) $config['host'],
+            'port'     => (int) $config['port'],
+            'db'       => (int) $config['db'],
+            'username' => (string) ($config['username'] ?? ''),
+            'prefix'   => (string) $config['prefix'],
+        ];
     }
 
     public function isEnabled(): bool

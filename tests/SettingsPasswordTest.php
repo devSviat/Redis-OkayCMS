@@ -25,7 +25,8 @@ class SettingsPasswordTest extends TestCase
     /** @return array{0: array<string, mixed>, 1: array<string, mixed>} збережене й передане в шаблон */
     private function submit(array $post, ?string $stored): array
     {
-        $saved = ['sviat__redis__password' => $stored];
+        $saved = ['sviat__redis__password' => $stored, 'sviat__redis__host' => 'redis.local', 'sviat__redis__port' => 6379];
+        $post += ['host' => 'redis.local', 'port' => '6379', 'prefix' => 'okay:'];
 
         $settings = $this->createStub(Settings::class);
         $settings->method('get')->willReturnCallback(function (string $k) use (&$saved) {
@@ -58,13 +59,18 @@ class SettingsPasswordTest extends TestCase
         });
         $design->method('fetch')->willReturn('');
 
-        $controller = new \ReflectionClass(RedisSettingsAdmin::class)->newInstanceWithoutConstructor();
+        $controller = new \ReflectionClass(new class extends RedisSettingsAdmin {
+            public function __construct() {}
+            protected function isFromThisSite(): bool { return true; }
+        })->newInstanceWithoutConstructor();
         $parent = new \ReflectionClass(\Okay\Admin\Controllers\IndexAdmin::class);
         foreach (['settings' => $settings, 'request' => $request, 'design' => $design, 'response' => $this->createStub(Response::class)] as $prop => $value) {
             self::accessible($parent->getProperty($prop))->setValue($controller, $value);
         }
 
-        $controller->fetch($this->createStub(RedisCacheService::class));
+        $redis = $this->createStub(RedisCacheService::class);
+        $redis->method('connectionView')->willReturn(['enabled' => false, 'host' => 'redis.local', 'port' => 6379, 'db' => 0, 'username' => '', 'prefix' => 'okay:']);
+        $controller->fetch($redis);
 
         return [$saved, $assigned];
     }
@@ -117,6 +123,48 @@ class SettingsPasswordTest extends TestCase
                 self::assertNotEmpty($lang[$key] ?? null, "$language: $key");
             }
         }
+    }
+
+    public function testForeignOriginWritesNothing(): void
+    {
+        $saved = [];
+        $settings = $this->createStub(Settings::class);
+        $settings->method('set')->willReturnCallback(function (string $k, $v) use (&$saved) {
+            $saved[$k] = $v;
+        });
+        $request = new class extends Request {
+            public function __construct() {}
+            public function method($method = null) { return true; }
+            public function post($name = null, $type = null, $default = null) { return $name === 'action' ? 'save' : 'x'; }
+        };
+        $statuses = [];
+        $response = $this->createStub(Response::class);
+        $response->method('setStatusCode')->willReturnCallback(function ($code) use (&$statuses, $response) {
+            $statuses[] = $code;
+            return $response;
+        });
+
+        $controller = new \ReflectionClass(new class extends RedisSettingsAdmin {
+            public function __construct() {}
+            protected function isFromThisSite(): bool { return false; }
+        })->newInstanceWithoutConstructor();
+        $parent = new \ReflectionClass(\Okay\Admin\Controllers\IndexAdmin::class);
+        foreach (['settings' => $settings, 'request' => $request, 'design' => $this->createStub(Design::class), 'response' => $response] as $prop => $value) {
+            self::accessible($parent->getProperty($prop))->setValue($controller, $value);
+        }
+
+        $controller->fetch($this->createStub(RedisCacheService::class));
+
+        self::assertSame([], $saved);
+        self::assertSame([403], $statuses);
+    }
+
+    public function testPostWithoutKnownActionWritesNothing(): void
+    {
+        [$saved] = $this->submit(['password' => 'новий'], 'секрет');
+
+        self::assertSame('секрет', $saved['sviat__redis__password']);
+        self::assertArrayNotHasKey('sviat__redis__default_ttl', $saved);
     }
 
     public function testStoredPasswordNeverReachesTemplate(): void
