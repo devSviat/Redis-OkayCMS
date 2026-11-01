@@ -13,7 +13,7 @@ class RedisCacheService
      * Позначка підписаного значення. Значення йдуть у ціну й HTML вітрини, тож
      * доступ на запис до Redis не має ставати можливістю їх підмінити.
      */
-    private const string SIGNATURE_MARK = 'sig1:';
+    private const string SIGNATURE_MARK = 'sig2:';
     private const int SIGNATURE_LENGTH = 64;
 
     private Settings $settings;
@@ -1092,7 +1092,7 @@ class RedisCacheService
                 $this->statMisses++;
                 return null;
             }
-            $value = $this->decode((string) $data);
+            $value = $this->decode($key, (string) $data);
             if ($value === null) {
                 $this->getMemo[$key] = [false, null];
                 $this->statMisses++;
@@ -1153,7 +1153,7 @@ class RedisCacheService
                     $this->statMisses++;
                     continue;
                 }
-                $value = $this->decode((string) $data);
+                $value = $this->decode($k, (string) $data);
                 if ($value === null) {
                     $this->getMemo[$k] = [false, null];
                     $result[$k] = null;
@@ -1202,15 +1202,18 @@ class RedisCacheService
         ]));
     }
 
-    private function seal(string $data): string
+    /** Ключ кешу входить у підпис: інакше чинне значення можна було б скопіювати під чужий ключ. */
+    private function seal(string $cacheKey, string $data): string
     {
         $key = $this->signingKey();
 
-        return $key === null ? $data : self::SIGNATURE_MARK . hash_hmac('sha256', $data, $key) . $data;
+        return $key === null
+            ? $data
+            : self::SIGNATURE_MARK . hash_hmac('sha256', $cacheKey . "\0" . $data, $key) . $data;
     }
 
     /** @return mixed значення або null, якщо підпису немає чи він не збігся */
-    private function decode(string $raw)
+    private function decode(string $cacheKey, string $raw)
     {
         $key = $this->signingKey();
         if ($key === null) {
@@ -1223,7 +1226,7 @@ class RedisCacheService
         }
         $signature = substr($raw, $markLength, self::SIGNATURE_LENGTH);
         $data = substr($raw, $markLength + self::SIGNATURE_LENGTH);
-        if (!hash_equals(hash_hmac('sha256', $data, $key), $signature)) {
+        if (!hash_equals(hash_hmac('sha256', $cacheKey . "\0" . $data, $key), $signature)) {
             $this->lastError = 'Cache signature mismatch';
 
             return null;
@@ -1261,7 +1264,7 @@ class RedisCacheService
             $ttl = max(self::MIN_TTL, (int) $config['ttl']);
         }
         try {
-            $data = $this->seal(serialize($value));
+            $data = $this->seal($key, serialize($value));
             $started = microtime(true);
             $client->setex($key, $ttl, $data);
             $this->statSeconds += microtime(true) - $started;

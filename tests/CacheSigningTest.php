@@ -56,7 +56,7 @@ class CacheSigningTest extends TestCase
         $this->service($client)->set('helpers:k', ['price' => 100]);
 
         self::assertSame(['price' => 100], $this->service($client)->get('helpers:k'));
-        self::assertStringStartsWith('sig1:', $client->store['helpers:k']);
+        self::assertStringStartsWith('sig2:', $client->store['helpers:k']);
     }
 
     public function testTamperedValueIsAMiss(): void
@@ -87,6 +87,16 @@ class CacheSigningTest extends TestCase
         self::assertNull($this->service($client)->get('helpers:k'));
     }
 
+    public function testSignedValueCannotBeMovedToAnotherKey(): void
+    {
+        $client = new FakeRedisClient();
+        $this->service($client)->set('helpers:cheap', ['price' => 1]);
+        $client->store['helpers:expensive'] = $client->store['helpers:cheap'];
+
+        self::assertNull($this->service($client)->get('helpers:expensive'));
+        self::assertSame(['helpers:expensive' => null], $this->service($client)->mGet(['helpers:expensive']));
+    }
+
     public function testEnvKeyWins(): void
     {
         $client = new FakeRedisClient();
@@ -100,7 +110,7 @@ class CacheSigningTest extends TestCase
     {
         $client = new FakeRedisClient();
         $this->service($client)->set('helpers:good', 'ok');
-        $client->store['helpers:bad'] = 'sig1:' . str_repeat('0', 64) . serialize('evil');
+        $client->store['helpers:bad'] = 'sig2:' . str_repeat('0', 64) . serialize('evil');
 
         $result = $this->service($client)->mGet(['helpers:good', 'helpers:bad']);
 
