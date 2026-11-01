@@ -270,7 +270,7 @@ class BreakerAndPendingBumpsTest extends TestCase
         if (!class_exists('\\Redis')) { $this->markTestSkipped('phpredis not installed'); }
         file_put_contents($this->bumpsFile(), "*\n");
         $client = new FakeRedisClient();
-        $client->failFlush = true;
+        $client->failScanTimes = 1;
         $service = $this->makeService($client);
 
         $service->get('anything');

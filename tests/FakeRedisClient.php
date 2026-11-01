@@ -67,20 +67,61 @@ class FakeRedisClient
         return $this->store[$key];
     }
 
-    public function del($key): int
+    public function del(...$keys): int
     {
-        $this->calls[] = ['del', $key];
-        if (!array_key_exists($key, $this->store)) {
-            return 0;
+        $deleted = 0;
+        foreach ($keys as $key) {
+            $this->calls[] = ['del', $key];
+            if (array_key_exists($key, $this->foreign)) {
+                unset($this->foreign[$key]);
+                $deleted++;
+                continue;
+            }
+            $logical = str_starts_with($key, $this->physicalPrefix)
+                ? substr($key, strlen($this->physicalPrefix))
+                : $key;
+            if (array_key_exists($logical, $this->store)) {
+                unset($this->store[$logical], $this->ttls[$logical]);
+                $deleted++;
+            }
         }
-        unset($this->store[$key], $this->ttls[$key]);
-        return 1;
+        return $deleted;
     }
 
-    public bool $failFlush = false;
-    public function flushDB(): bool
+    /** store тримає ключі без префікса: так їх бачить клієнт з OPT_PREFIX. SCAN віддає фізичні імена. */
+    public string $physicalPrefix = 'okay:';
+
+    /** Ключі інших сервісів у тій самій DB, із повними іменами. */
+    public array $foreign = [];
+
+    public int $scanPageSize = 1000;
+    public int $failScanTimes = 0;
+
+    public function scan(&$cursor, $pattern = null, $count = 0)
     {
-        if ($this->failFlush) { throw new \RuntimeException('flush failed'); }
-        $this->store = []; $this->ttls = []; return true;
+        $this->calls[] = ['scan', $pattern];
+        if ($this->failScanTimes > 0) {
+            $this->failScanTimes--;
+            throw new \RuntimeException('scan failed');
+        }
+        $physical = array_merge(
+            array_map(fn ($k) => $this->physicalPrefix . $k, array_keys($this->store)),
+            array_keys($this->foreign)
+        );
+        $matched = array_values(array_filter($physical, fn ($k) => fnmatch((string) $pattern, $k)));
+        $page = array_slice($matched, 0, $this->scanPageSize);
+        $cursor = count($matched) > count($page) ? 1 : 0;
+        return $page;
+    }
+
+    public function eval($script, $args = [], $numKeys = 0)
+    {
+        $this->calls[] = ['eval', $args];
+        [$key, $token] = $args;
+        if (($this->store[$key] ?? null) !== $token) {
+            return 0;
+        }
+        unset($this->store[$key]);
+        return 1;
     }
 }

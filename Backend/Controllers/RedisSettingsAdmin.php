@@ -19,8 +19,15 @@ class RedisSettingsAdmin extends IndexAdmin
             $this->settings->set('sviat__redis__port', (int)$this->request->post('port'));
             $this->settings->set('sviat__redis__db', (int)$this->request->post('db'));
             $this->settings->set('sviat__redis__username', trim((string) $this->request->post('username')));
-            // Save password as-is; empty value means no auth.
-            $this->settings->set('sviat__redis__password', (string) ($this->request->post('password') ?? ''));
+            // Пароль не виводиться в HTML, тому порожнє поле означає «без змін».
+            if ((int) $this->request->post('clear_password') === 1) {
+                $this->settings->set('sviat__redis__password', '');
+            } else {
+                $newPassword = (string) ($this->request->post('password') ?? '');
+                if ($newPassword !== '') {
+                    $this->settings->set('sviat__redis__password', $newPassword);
+                }
+            }
             $this->settings->set('sviat__redis__prefix', $this->request->post('prefix'));
             $this->settings->set('sviat__redis__default_ttl', (int)$this->request->post('default_ttl'));
 
@@ -63,7 +70,7 @@ class RedisSettingsAdmin extends IndexAdmin
         $this->design->assign('redis_port', (int)($this->settings->get('sviat__redis__port') ?: 6379));
         $this->design->assign('redis_db', (int)($this->settings->get('sviat__redis__db') ?: 0));
         $this->design->assign('redis_username', (string) ($this->settings->get('sviat__redis__username') ?? ''));
-        $this->design->assign('redis_password', $this->settings->get('sviat__redis__password'));
+        $this->design->assign('redis_password_is_set', (string) ($this->settings->get('sviat__redis__password') ?? '') !== '');
         $this->design->assign('redis_prefix', $this->settings->get('sviat__redis__prefix') ?: 'okay:');
         $this->design->assign('redis_default_ttl', (int)($this->settings->get('sviat__redis__default_ttl') ?: 600));
 

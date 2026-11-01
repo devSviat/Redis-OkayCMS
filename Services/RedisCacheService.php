@@ -40,6 +40,9 @@ class RedisCacheService
     /** @var array<string, true> ключі, перерахунок яких уже заплановано в цьому запиті */
     private array $refreshing = [];
 
+    /** @var array<string, string> токени власника замків: протухлий замок не знімає старий власник */
+    private array $refreshLockTokens = [];
+
     /** Вікно схлопування повторних bump одного тега, секунди. */
     private const float BUMP_COLLAPSE_WINDOW = 1.0;
 
@@ -383,24 +386,39 @@ class RedisCacheService
         }
     }
 
+    /**
+     * Видаляє лише ключі модуля: FLUSHDB знищив би сесії й черги інших сервісів
+     * у тій самій логічній DB. Значення й версії тегів лежать під helpers:.
+     */
     public function flushAll(): bool
     {
         if (!$this->isEnabled()) {
             return false;
         }
+        // Без OPT_PREFIX: SCAN порівнює фізичні імена, а DEL інакше додав би префікс удруге.
         $client = $this->connectBare(false);
         if (!$client) {
             return false;
         }
         try {
-            $client->flushDB();
+            // Екранування: «*» у префіксі зачепив би ключі сусіднього магазину.
+            $pattern = addcslashes((string) $this->loadConfig()['prefix'], '\\*?[]') . 'helpers:*';
+            /** @var int|string|null $cursor */
+            $cursor = null;
+            do {
+                $keys = $client->scan($cursor, $pattern, 500);
+                if (is_array($keys) && $keys !== []) {
+                    $client->del(...$keys);
+                }
+            } while ((int) $cursor !== 0);
+
             $this->versionMemo = [];
             $this->getMemo = [];
-
+            $this->refreshLockTokens = [];
+            $this->refreshing = [];
             return true;
         } catch (\Throwable $e) {
             $this->lastError = $e->getMessage();
-
             return false;
         } finally {
             try { $client->close(); } catch (\Throwable) {}
@@ -922,13 +940,22 @@ class RedisCacheService
 
     private function releaseRefreshLock(string $key): void
     {
+        $token = $this->refreshLockTokens[$key] ?? null;
+        unset($this->refreshLockTokens[$key]);
+        if ($token === null) {
+            return;
+        }
         $client = $this->initClient();
         if (!$client) {
             return;
         }
 
         try {
-            $client->del($this->refreshLockKey($key));
+            // Атомарно: воркер, чий замок протух, не зніме замок наступника.
+            // OPT_PREFIX phpredis додає і до KEYS в eval().
+            $lua = 'if redis.call("GET", KEYS[1]) == ARGV[1] then '
+                . 'return redis.call("DEL", KEYS[1]) else return 0 end';
+            $client->eval($lua, [$this->refreshLockKey($key), $token], 1);
         } catch (\Throwable $e) {
             // Замок і сам протухне через SWR_LOCK_TTL.
             $this->lastError = $e->getMessage();
@@ -944,7 +971,12 @@ class RedisCacheService
         }
 
         try {
-            return (bool) $client->set($this->refreshLockKey($key), '1', ['nx', 'ex' => self::SWR_LOCK_TTL]);
+            $token = bin2hex(random_bytes(16));
+            if (!(bool) $client->set($this->refreshLockKey($key), $token, ['nx', 'ex' => self::SWR_LOCK_TTL])) {
+                return false;
+            }
+            $this->refreshLockTokens[$key] = $token;
+            return true;
         } catch (\Throwable $e) {
             $this->lastError = $e->getMessage();
             $this->dropClient();
