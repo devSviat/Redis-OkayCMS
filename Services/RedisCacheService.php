@@ -2,13 +2,22 @@
 
 namespace Okay\Modules\Sviat\Redis\Services;
 
+use Okay\Core\Config;
 use Okay\Core\Settings;
 
 class RedisCacheService
 {
     private const string VERSION_KEY_PREFIX = 'helpers:ver:';
 
+    /**
+     * Позначка підписаного значення. Значення йдуть у ціну й HTML вітрини, тож
+     * доступ на запис до Redis не має ставати можливістю їх підмінити.
+     */
+    private const string SIGNATURE_MARK = 'sig2:';
+    private const int SIGNATURE_LENGTH = 64;
+
     private Settings $settings;
+    private ?Config $config;
     private $client = null;
     private bool $initialized = false;
     private ?string $lastError = null;
@@ -39,6 +48,9 @@ class RedisCacheService
 
     /** @var array<string, true> ключі, перерахунок яких уже заплановано в цьому запиті */
     private array $refreshing = [];
+
+    /** @var array<string, string> токени власника замків: протухлий замок не знімає старий власник */
+    private array $refreshLockTokens = [];
 
     /** Вікно схлопування повторних bump одного тега, секунди. */
     private const float BUMP_COLLAPSE_WINDOW = 1.0;
@@ -74,6 +86,8 @@ class RedisCacheService
     private bool $breakerSuppressed = false;
     private bool $replayingBumps = false;
     private bool $stateDirResolved = false;
+    private bool $signingKeyResolved = false;
+    private ?string $signingKeyMemo = null;
     private ?string $stateDirMemo = null;
 
     private int $statHits = 0;
@@ -84,34 +98,47 @@ class RedisCacheService
 
     private static ?bool $authSupportsTwoArgs = null;
 
-    public function __construct(Settings $settings)
+    /** Поля підключення і суфікси REDIS_*: у config.local.php це redis_host тощо. */
+    private const array CONNECTION_FIELDS = [
+        'enabled'  => 'ENABLED',
+        'host'     => 'HOST',
+        'port'     => 'PORT',
+        'db'       => 'DB',
+        'username' => 'USERNAME',
+        'password' => 'PASSWORD',
+        'prefix'   => 'PREFIX',
+    ];
+
+    public function __construct(Settings $settings, ?Config $config = null)
     {
         $this->settings = $settings;
+        $this->config = $config;
     }
 
     /**
-     * Env має пріоритет над налаштуваннями в БД: інакше зміна REDIS_PASSWORD
-     * у .env лишає сайт мовчки без кешу, поки хтось не відкриє адмінку.
+     * Пріоритет: env, потім config.local.php, потім налаштування в БД. Інакше
+     * зміна REDIS_PASSWORD у .env лишає сайт мовчки без кешу, поки хтось не
+     * відкриє адмінку.
      */
     private function loadConfig(): array
     {
-        $password = self::env('REDIS_PASSWORD')
+        $password = $this->fixedValue('PASSWORD')
             ?? trim((string) ($this->settings->get('sviat__redis__password') ?? ''));
-        $username = self::env('REDIS_USERNAME')
+        $username = $this->fixedValue('USERNAME')
             ?? trim((string) ($this->settings->get('sviat__redis__username') ?? ''));
 
-        $enabledEnv = self::env('REDIS_ENABLED');
+        $enabledEnv = $this->fixedValue('ENABLED');
 
         return [
             'enabled'  => $enabledEnv !== null
                 ? filter_var($enabledEnv, FILTER_VALIDATE_BOOLEAN)
                 : (bool) $this->settings->get('sviat__redis__enabled'),
-            'host'     => self::env('REDIS_HOST') ?: ($this->settings->get('sviat__redis__host') ?: '127.0.0.1'),
-            'port'     => (int) (self::env('REDIS_PORT') ?: ($this->settings->get('sviat__redis__port') ?: 6379)),
-            'db'       => (int) (self::env('REDIS_DB') ?? ($this->settings->get('sviat__redis__db') ?: 0)),
+            'host'     => $this->fixedValue('HOST') ?: ($this->settings->get('sviat__redis__host') ?: '127.0.0.1'),
+            'port'     => (int) ($this->fixedValue('PORT') ?: ($this->settings->get('sviat__redis__port') ?: 6379)),
+            'db'       => (int) ($this->fixedValue('DB') ?? ($this->settings->get('sviat__redis__db') ?: 0)),
             'username' => $username !== '' ? $username : null,
             'auth'     => $password !== '' ? $password : null,
-            'prefix'   => self::env('REDIS_PREFIX') ?: ($this->settings->get('sviat__redis__prefix') ?: 'okay:'),
+            'prefix'   => $this->fixedValue('PREFIX') ?: ($this->settings->get('sviat__redis__prefix') ?: 'okay:'),
             'ttl'      => (int) ($this->settings->get('sviat__redis__default_ttl') ?: 600),
         ];
     }
@@ -127,6 +154,68 @@ class RedisCacheService
         }
         $value = trim((string) $value);
         return $value !== '' ? $value : null;
+    }
+
+    /** Значення поза адмінкою: env або config.local.php. */
+    private function fixedValue(string $name): ?string
+    {
+        return self::env('REDIS_' . $name) ?? $this->configValue($name);
+    }
+
+    private function configValue(string $name): ?string
+    {
+        if ($this->config === null) {
+            return null;
+        }
+        $value = $this->config->get('redis_' . strtolower($name));
+        if ($value === null) {
+            return null;
+        }
+        $value = trim((string) $value);
+
+        return $value !== '' ? $value : null;
+    }
+
+    /**
+     * Поля, які адмінка не може змінити.
+     *
+     * Пароль поза адмінкою закриває і хост, порт та користувача: інакше менеджер
+     * скерував би цей пароль на свій сервер.
+     *
+     * @return array<string, string> поле => 'env' або 'config'
+     */
+    public function lockedConnectionFields(): array
+    {
+        $locked = [];
+        foreach (self::CONNECTION_FIELDS as $field => $name) {
+            if (self::env('REDIS_' . $name) !== null) {
+                $locked[$field] = 'env';
+            } elseif ($this->configValue($name) !== null) {
+                $locked[$field] = 'config';
+            }
+        }
+        if (isset($locked['password'])) {
+            foreach (['host', 'port', 'username'] as $field) {
+                $locked[$field] ??= $locked['password'];
+            }
+        }
+
+        return $locked;
+    }
+
+    /** @return array{enabled: bool, host: string, port: int, db: int, username: string, prefix: string} */
+    public function connectionView(): array
+    {
+        $config = $this->loadConfig();
+
+        return [
+            'enabled'  => (bool) $config['enabled'],
+            'host'     => (string) $config['host'],
+            'port'     => (int) $config['port'],
+            'db'       => (int) $config['db'],
+            'username' => (string) ($config['username'] ?? ''),
+            'prefix'   => (string) $config['prefix'],
+        ];
     }
 
     public function isEnabled(): bool
@@ -383,24 +472,39 @@ class RedisCacheService
         }
     }
 
+    /**
+     * Видаляє лише ключі модуля: FLUSHDB знищив би сесії й черги інших сервісів
+     * у тій самій логічній DB. Значення й версії тегів лежать під helpers:.
+     */
     public function flushAll(): bool
     {
         if (!$this->isEnabled()) {
             return false;
         }
+        // Без OPT_PREFIX: SCAN порівнює фізичні імена, а DEL інакше додав би префікс удруге.
         $client = $this->connectBare(false);
         if (!$client) {
             return false;
         }
         try {
-            $client->flushDB();
+            // Екранування: «*» у префіксі зачепив би ключі сусіднього магазину.
+            $pattern = addcslashes((string) $this->loadConfig()['prefix'], '\\*?[]') . 'helpers:*';
+            /** @var int|string|null $cursor */
+            $cursor = null;
+            do {
+                $keys = $client->scan($cursor, $pattern, 500);
+                if (is_array($keys) && $keys !== []) {
+                    $client->del(...$keys);
+                }
+            } while ((int) $cursor !== 0);
+
             $this->versionMemo = [];
             $this->getMemo = [];
-
+            $this->refreshLockTokens = [];
+            $this->refreshing = [];
             return true;
         } catch (\Throwable $e) {
             $this->lastError = $e->getMessage();
-
             return false;
         } finally {
             try { $client->close(); } catch (\Throwable) {}
@@ -922,13 +1026,22 @@ class RedisCacheService
 
     private function releaseRefreshLock(string $key): void
     {
+        $token = $this->refreshLockTokens[$key] ?? null;
+        unset($this->refreshLockTokens[$key]);
+        if ($token === null) {
+            return;
+        }
         $client = $this->initClient();
         if (!$client) {
             return;
         }
 
         try {
-            $client->del($this->refreshLockKey($key));
+            // Атомарно: воркер, чий замок протух, не зніме замок наступника.
+            // OPT_PREFIX phpredis додає і до KEYS в eval().
+            $lua = 'if redis.call("GET", KEYS[1]) == ARGV[1] then '
+                . 'return redis.call("DEL", KEYS[1]) else return 0 end';
+            $client->eval($lua, [$this->refreshLockKey($key), $token], 1);
         } catch (\Throwable $e) {
             // Замок і сам протухне через SWR_LOCK_TTL.
             $this->lastError = $e->getMessage();
@@ -944,7 +1057,12 @@ class RedisCacheService
         }
 
         try {
-            return (bool) $client->set($this->refreshLockKey($key), '1', ['nx', 'ex' => self::SWR_LOCK_TTL]);
+            $token = bin2hex(random_bytes(16));
+            if (!(bool) $client->set($this->refreshLockKey($key), $token, ['nx', 'ex' => self::SWR_LOCK_TTL])) {
+                return false;
+            }
+            $this->refreshLockTokens[$key] = $token;
+            return true;
         } catch (\Throwable $e) {
             $this->lastError = $e->getMessage();
             $this->dropClient();
@@ -974,7 +1092,7 @@ class RedisCacheService
                 $this->statMisses++;
                 return null;
             }
-            $value = $this->safeUnserialize((string) $data);
+            $value = $this->decode($key, (string) $data);
             if ($value === null) {
                 $this->getMemo[$key] = [false, null];
                 $this->statMisses++;
@@ -1035,7 +1153,7 @@ class RedisCacheService
                     $this->statMisses++;
                     continue;
                 }
-                $value = $this->safeUnserialize((string) $data);
+                $value = $this->decode($k, (string) $data);
                 if ($value === null) {
                     $this->getMemo[$k] = [false, null];
                     $result[$k] = null;
@@ -1056,6 +1174,65 @@ class RedisCacheService
             }
         }
         return $result;
+    }
+
+    /** Ключ ніколи не лежить у Redis: env, конфіг або похідний від доступу до БД. */
+    private function signingKey(): ?string
+    {
+        if ($this->signingKeyResolved) {
+            return $this->signingKeyMemo;
+        }
+        $this->signingKeyResolved = true;
+
+        $explicit = self::env('REDIS_SIGNING_KEY') ?? $this->configValue('SIGNING_KEY');
+        if ($explicit !== null) {
+            return $this->signingKeyMemo = $explicit;
+        }
+        if ($this->config === null) {
+            return null;
+        }
+
+        // Спільне для php-fpm і планувальника, на відміну від salt, що залежить від stat() файлу.
+        return $this->signingKeyMemo = hash('sha256', implode('|', [
+            'sviat-redis-cache',
+            (string) $this->config->get('db_server'),
+            (string) $this->config->get('db_user'),
+            (string) $this->config->get('db_password'),
+            (string) $this->config->get('db_name'),
+        ]));
+    }
+
+    /** Ключ кешу входить у підпис: інакше чинне значення можна було б скопіювати під чужий ключ. */
+    private function seal(string $cacheKey, string $data): string
+    {
+        $key = $this->signingKey();
+
+        return $key === null
+            ? $data
+            : self::SIGNATURE_MARK . hash_hmac('sha256', $cacheKey . "\0" . $data, $key) . $data;
+    }
+
+    /** @return mixed значення або null, якщо підпису немає чи він не збігся */
+    private function decode(string $cacheKey, string $raw)
+    {
+        $key = $this->signingKey();
+        if ($key === null) {
+            return $this->safeUnserialize($raw);
+        }
+
+        $markLength = strlen(self::SIGNATURE_MARK);
+        if (strncmp($raw, self::SIGNATURE_MARK, $markLength) !== 0) {
+            return null;
+        }
+        $signature = substr($raw, $markLength, self::SIGNATURE_LENGTH);
+        $data = substr($raw, $markLength + self::SIGNATURE_LENGTH);
+        if (!hash_equals(hash_hmac('sha256', $cacheKey . "\0" . $data, $key), $signature)) {
+            $this->lastError = 'Cache signature mismatch';
+
+            return null;
+        }
+
+        return $this->safeUnserialize($data);
     }
 
     private function safeUnserialize(string $data)
@@ -1087,7 +1264,7 @@ class RedisCacheService
             $ttl = max(self::MIN_TTL, (int) $config['ttl']);
         }
         try {
-            $data = serialize($value);
+            $data = $this->seal($key, serialize($value));
             $started = microtime(true);
             $client->setex($key, $ttl, $data);
             $this->statSeconds += microtime(true) - $started;

@@ -355,4 +355,101 @@ class RedisCacheServiceTest extends TestCase
 
         $this->assertSame(1, $service->getRequestStats()['hits']);
     }
+
+    private function serviceWithBareClient(?object $client, bool $enabled = true): RedisCacheService
+    {
+        $settings = $this->createStub(Settings::class);
+        $settings->method('get')->willReturnCallback(fn (string $k) => $k === 'sviat__redis__enabled' ? $enabled : null);
+
+        return new class ($settings, $client) extends RedisCacheService {
+            public function __construct(Settings $settings, private ?object $bare)
+            {
+                parent::__construct($settings);
+            }
+
+            protected function connectBare(bool $applyKeyPrefix = true, bool $persistent = false)
+            {
+                return $this->bare;
+            }
+        };
+    }
+
+    public function testConnectionSucceedsOnPong(): void
+    {
+        if (!class_exists('\\Redis')) { $this->markTestSkipped('phpredis not installed'); }
+        $service = $this->serviceWithBareClient(new FakeRedisClient());
+
+        self::assertTrue($service->testConnection());
+        self::assertNull($service->getLastError());
+    }
+
+    public function testConnectionReportsUnexpectedAnswer(): void
+    {
+        if (!class_exists('\\Redis')) { $this->markTestSkipped('phpredis not installed'); }
+        $client = new class extends FakeRedisClient {
+            public function ping() { return 'LOADING'; }
+        };
+        $service = $this->serviceWithBareClient($client);
+
+        self::assertFalse($service->testConnection());
+        self::assertSame('Unexpected PING response from Redis', $service->getLastError());
+    }
+
+    public function testConnectionReportsServerFailure(): void
+    {
+        if (!class_exists('\\Redis')) { $this->markTestSkipped('phpredis not installed'); }
+        $client = new class extends FakeRedisClient {
+            public function ping() { throw new \RuntimeException('NOAUTH'); }
+        };
+        $service = $this->serviceWithBareClient($client);
+
+        self::assertFalse($service->testConnection());
+        self::assertSame('NOAUTH', $service->getLastError());
+    }
+
+    public function testDisabledModuleIsCheckedOnlyWhenAdminAsks(): void
+    {
+        if (!class_exists('\\Redis')) { $this->markTestSkipped('phpredis not installed'); }
+        $service = $this->serviceWithBareClient(new FakeRedisClient(), false);
+
+        self::assertFalse($service->testConnection());
+        self::assertTrue($service->testConnection(true));
+    }
+
+    public function testStatsReportServerState(): void
+    {
+        if (!class_exists('\\Redis')) { $this->markTestSkipped('phpredis not installed'); }
+        $client = new FakeRedisClient();
+        $client->store['k'] = 'v';
+
+        $stats = $this->makeService($client)->getStats();
+
+        self::assertTrue($stats['connected']);
+        self::assertSame(1, $stats['db_size']);
+        self::assertSame('1M', $stats['used_memory']);
+    }
+
+    public function testStatsSurviveServerFailure(): void
+    {
+        if (!class_exists('\\Redis')) { $this->markTestSkipped('phpredis not installed'); }
+        $client = new class extends FakeRedisClient {
+            public function info(): array { throw new \RuntimeException('down'); }
+        };
+
+        $stats = $this->makeService($client)->getStats();
+
+        self::assertFalse($stats['connected']);
+        self::assertSame('down', $stats['error']);
+    }
+
+    public function testInvalidateProductDataBumpsBothProductScopes(): void
+    {
+        if (!class_exists('\\Redis')) { $this->markTestSkipped('phpredis not installed'); }
+        $client = new FakeRedisClient();
+
+        $this->makeService($client)->invalidateProductData();
+
+        self::assertSame(1, $client->store['helpers:ver:pall:global']);
+        self::assertSame(1, $client->store['helpers:ver:plist:global']);
+    }
 }

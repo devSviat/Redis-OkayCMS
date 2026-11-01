@@ -4,6 +4,7 @@ namespace Okay\Modules\Sviat\Redis\Init;
 
 use Okay\Core\Modules\AbstractInit;
 use Okay\Helpers\MainHelper;
+use Okay\Helpers\UserHelper;
 use Okay\Entities\AuthorsEntity;
 use Okay\Entities\BlogEntity;
 use Okay\Entities\BrandsEntity;
@@ -25,6 +26,7 @@ use Okay\Modules\Sviat\Redis\Extenders\FeaturesCacheInvalidator;
 use Okay\Modules\Sviat\Redis\Extenders\FeaturesValuesCacheInvalidator;
 use Okay\Modules\Sviat\Redis\Extenders\ImagesCacheInvalidator;
 use Okay\Modules\Sviat\Redis\Extenders\ProductCacheInvalidator;
+use Okay\Modules\Sviat\Redis\Extenders\ProductRouteWarmer;
 use Okay\Modules\Sviat\Redis\Extenders\SpecialImagesCacheInvalidator;
 use Okay\Modules\Sviat\Redis\Extenders\VariantsCacheInvalidator;
 
@@ -44,6 +46,12 @@ class Init extends AbstractInit
         $this->registerQueueExtension(
             [MainHelper::class, 'commonAfterControllerProcedure'],
             [CacheStatsReporter::class, 'reportStats']
+        );
+
+        // Останній розширюваний метод перед setDesignDataProcedure(): там будується мовний перемикач.
+        $this->registerQueueExtension(
+            [UserHelper::class, 'mergeBrowsedProducts'],
+            [ProductRouteWarmer::class, 'warmCurrentProduct']
         );
 
         // Products
