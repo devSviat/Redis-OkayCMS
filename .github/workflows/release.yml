@@ -42,7 +42,7 @@ jobs:
         # на якій модуль перевіряють.
         php: ['8.5']
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: shivammathur/setup-php@v2
         with:
@@ -78,7 +78,7 @@ jobs:
             php: '8.5'
     steps:
       - name: Check out the module
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           path: module
 
@@ -107,7 +107,7 @@ jobs:
       # справжнього рушія. Розкладка — та сама, що у верстаку okay-lab.
       - name: Check out the ${{ matrix.target }} engine
         if: steps.tests.outputs.present == 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: ${{ matrix.repo }}
           ref: ${{ matrix.ref }}
@@ -142,7 +142,7 @@ jobs:
       needed: ${{ steps.ver.outputs.needed }}
       commit: ${{ steps.tag.outputs.commit }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -198,7 +198,7 @@ jobs:
 
       - name: Publish the release
         if: steps.ver.outputs.needed == 'true'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.ver.outputs.tag }}
           name: ${{ steps.ver.outputs.tag }}
@@ -214,7 +214,7 @@ jobs:
     outputs:
       present: ${{ steps.check.outputs.present }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -255,7 +255,7 @@ jobs:
       matrix:
         php: ['8.5']
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: fork
 
@@ -298,7 +298,7 @@ jobs:
             php: '8.5'
     steps:
       - name: Check out the fork branch
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: fork
           path: module
@@ -326,7 +326,7 @@ jobs:
 
       - name: Check out the ${{ matrix.target }} engine
         if: steps.tests.outputs.present == 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: ${{ matrix.repo }}
           ref: ${{ matrix.ref }}
@@ -356,7 +356,7 @@ jobs:
     if: needs.detect-fork.outputs.present == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: fork
           fetch-depth: 0
@@ -384,7 +384,7 @@ jobs:
           (cd build && zip -rq "../dist/$MODULE-${{ needs.release.outputs.tag }}-fork.zip" "$VENDOR")
 
       - name: Publish the release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.release.outputs.tag }}-fork
           name: ${{ needs.release.outputs.tag }}-fork
